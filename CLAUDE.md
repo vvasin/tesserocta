@@ -29,6 +29,16 @@ npm test             # Playwright e2e (auto-starts the server); specs in tests/
 npm run lint         # ESLint
 ```
 
+No build step — `index.html` loads `src/*.js` as ES modules directly. There are no unit
+tests; correctness is verified by driving the real app (Playwright). The app exposes
+`window.__app` for introspection/control:
+
+```js
+const a = window.__app;
+a.viewYaw = -0.6; a.viewPitch = 0.5; a.viewZoom = 1.4; a.viewRot = a._composeViewRot();
+a.coreFrame;                        // current 4D frame {e:[e0,e1,e2], eF} — at rest, a canonical frame
+```
+
 **Remote/cloud sessions** (Claude Code web containers): Chromium is pre-installed under
 `/opt/pw-browsers` and `npx playwright install` is unavailable; if its revision doesn't
 match the repo's pinned Playwright, point the launch at it for the session — in
@@ -41,8 +51,10 @@ every `errors == []` assertion in the specs.
 ## Files
 
 - `index.html` / `style.css` — the page shell. Mobile-first, `dvh` + safe-area insets; `#app` width = `min(100vw,100dvh)` (square-capped).
+- `src/main.js` — `App`: state, render loop (`_loop`/`_render`, dirty-flag redraw), view (yaw/pitch/zoom). Bootstraps `window.__app`.
 - `src/math4d.js` — 4×4 / 3×3 matrix + 4D vector helpers (`mat4PlaneRotation`, `mat4MulVec4`, `PLANE_AXES`, …).
 - `src/puzzle.js` — cubie model, `CELLS` (the 8 cells + colors), `executeMove`/`undoMove`.
+- `src/projection.js` — **the heart**: 4D→3D projection, cubie geometry, color fade, canonical frames. Almost all design decisions live here.
 - `src/renderer.js` — WebGL: opaque, depth-tested, **no back-face culling**. `beginFrame()` clears the whole canvas; `drawView(cells, viewRot, segments, camDist, rect, zoom)` renders one scissored viewport (`zoom` crops/magnifies without moving the camera) — called once per view.
 - `src/shaders.js` — GLSL. Two-sided lambert (`abs(dot(n,light))`), `u_ambient=0.42`; screen-door dither `discard` via an **ordered Bayer 8×8** threshold (uniform frosted stipple, not noise) — keeps each fragment with probability `a_opacity`, for the solid→wireframe dissolve and the translucent semitransparent side cells.
 - `scripts/serve.js` — zero-dep static dev server (sets ESM MIME types). `tests/` — Playwright specs. `playwright.config.js`, `eslint.config.js`, `package.json` — infra.
@@ -59,4 +71,46 @@ every `errors == []` assertion in the specs.
 - **A cell turn is an absolute 4D rotation of the affected cubies** (`executeMove` rotates
   `pos4`, `faceDirs`, and `orient` by `mat4PlaneRotation`). It never touches the frame.
   Legal planes per cell axis: ±X→YZ,YW,ZW · ±Y→XZ,XW,ZW · ±Z→XY,XW,YW · ±W→XY,XZ,YZ.
+
+## Projection model (`projection.js`) — read this before touching rendering
+
+> **Central tension:** a 4D rotation's 3D shadow can't be both a rigid constant-size
+> cube *and* smoothly reveal/hide the colors it swaps. We keep the cube rigid and pay
+> for the reveal in color, not shape. The long-form rationale, the collision analysis
+> behind the color fade, and the approaches we tried and dropped live in
+> [docs/model-notes.md](docs/model-notes.md) — read it before reworking the projection
+> or coloring.
+
+Two distinct 4D→3D projections coexist on purpose:
+
+**1. The core frame** `{ e:[e0,e1,e2], eF }` — three orthonormal "free" axes mapped to
+screen x/y/z, plus a depth axis `eF` (the central-cell direction). `project(p) =
+[p·e0, p·e1, p·e2] · depthR(p·eF)`, with `depthR(w)=2.8−1.45w` (w=1→1.35 inner, 0→2.8,
+−1→4.25 outer). This is a Schlegel-style 4D perspective: the central cell is the small
+inner cube, the opposite cell the big enclosing one, the 6 others spread between.
+- Cubies with <2 nonzero coords are hidden (`isHidden`): the 8 cell-centers + 1 core
+  cubie. So **72 cubies render**, not 80.
+
+**2. Each cubie is its OWN little Schlegel tesseract** (`cubieBoxes`), *placed* at its
+core position but *shaped* independently (so it doesn't inherit core distortion — it reads
+as a clean cube, not a "shard of the core"). 8 cells per cubie: inner small cube, outer
+big cube, 6 side frustums, via `cubiePersp(dz)=1−PERSP_SLOPE·dz`. `CUBE_S=0.41` so a side
+cell's outer face lands ~0.58 (the cube-face size). Each cell is inset toward its centroid
+by `CUBIE_SHRINK=0.9` — and because the **outer cell is inside-out** (centroid at the
+cubie center, far from its faces) the same inset pulls it well behind the side stickers, so
+it self-hides without z-fighting.
+
+### Other rendering facts
+
+- **No back-face culling** (`renderer.js`). The depth buffer handles occlusion; culling
+  used to delete a face as it went edge-on, leaving see-through holes between the cubie's
+  separate cell boxes. Removing it makes cubies stay solid at grazing angles.
+- `DARK=[0.10,0.10,0.13]` for non-sticker faces; background `[0.04,0.04,0.06]`.
+
+## View, modes, controls
+
+- **View** is a turntable: independent `viewYaw`/`viewPitch` (recomposed by
+  `_composeViewRot`, pitch clamped to ±90°) so a horizontal turn never introduces roll.
+  `viewZoom` sets the camera distance (`MAIN_CAM/zoom`). View changes never touch puzzle
+  state.
 

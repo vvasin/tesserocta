@@ -8,10 +8,23 @@ async function gotoApp(page) {
   page.on('pageerror', e => errors.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
   await page.goto('/');
+  await page.waitForFunction(() => !!window.__app);
+  await page.waitForTimeout(400);
   return errors;
 }
 
-test('loads without errors', async ({ page }) => {
+test('loads and renders a non-blank scene', async ({ page }) => {
   const errors = await gotoApp(page);
+  // preserveDrawingBuffer is on, so read the last frame straight from the GL context.
+  const brightPixels = await page.evaluate(() => {
+    const gl = window.__app.renderer.gl;
+    const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let n = 0;
+    for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 80) n++;
+    return n;
+  });
+  expect(brightPixels).toBeGreaterThan(2000);   // the puzzle actually drew
   expect(errors).toEqual([]);
 });
