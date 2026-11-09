@@ -10,7 +10,7 @@
 // coloured by whichever sticker currently points along that free axis.
 
 import { CELLS } from './puzzle.js';
-import { mat4MulVec4, mat4FromCols, mat4Transpose, mat4Mul, mat4Det } from './math4d.js';
+import { mat4MulVec4, mat4FromCols, mat4Transpose, mat4Mul, mat4Det, so4Slerp } from './math4d.js';
 
 // Cubies are drawn as their OWN little Schlegel tesseract (same projection style as
 // the core): inner cell → small central cube, outer cell → big enclosing cube,
@@ -90,6 +90,36 @@ export function frameForCell(cellIndex) {
     e = [e[0], e[2], e[1]];
   }
   return { e, eF: unit4(ax, val) };
+}
+
+// Frame ↔ column-major 4×4 (columns = e0,e1,e2,eF).
+function frameToMat(f) { return mat4FromCols(f.e[0], f.e[1], f.e[2], f.eF); }
+function matToFrame(M) {
+  return {
+    e: [[M[0],M[1],M[2],M[3]], [M[4],M[5],M[6],M[7]], [M[8],M[9],M[10],M[11]]],
+    eF: [M[12],M[13],M[14],M[15]],
+  };
+}
+
+// Geodesic interpolation of the core frame from `fromFrame` to `toFrame` by t∈[0,1].
+// Both are signed-permutation frames; the SO(4) geodesic is smooth at every angle
+// (including the 180° opposite-cell case) and lands EXACTLY on toFrame at t=1.
+export function slerpFrame(fromFrame, toFrame, t) {
+  const Mf = frameToMat(fromFrame), Mt = frameToMat(toFrame);
+  const Rt = so4Slerp(mat4Mul(Mt, mat4Transpose(Mf)), t);   // world rotation from→to, eased by t
+  return matToFrame(mat4Mul(Rt, Mf));
+}
+
+export function cloneFrame(f) {
+  return { e: f.e.map(v => v.slice()), eF: f.eF.slice() };
+}
+
+// Which cell is central for a (rest) frame: the axis eF points along.
+export function centralFromFrame(f) {
+  let ax = 0, best = 0;
+  for (let k = 0; k < 4; k++) if (Math.abs(f.eF[k]) > Math.abs(best)) { best = f.eF[k]; ax = k; }
+  const val = best > 0 ? 1 : -1;
+  return CELLS.findIndex(c => c.axis === ax && c.val === val);
 }
 
 // ── Projection ────────────────────────────────────────────────────────────────

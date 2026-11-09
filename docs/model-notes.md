@@ -158,6 +158,28 @@ transparency for depth (unreadable "translucent hell"); per-axis "lobe" renderin
 - **Stationary-side collisions still snap.** Given §3, hiding them would require
   darkening the lit stationary sides — i.e. back toward the whole-cubie blackout. We
   chose snaps over an all-black puzzle.
+- **Centering snaps more than turns.** It uses the symmetric settled fade (no
+  directional target available mid frame-sweep). Threading the target frame's `eF`
+  through would give it the same hide/reveal timing — open if it ever bothers us.
 - **No back-face culling.** The depth buffer handles occlusion; culling deleted faces
   as they went edge-on, leaving see-through holes between a cubie's separate cell
   boxes. Safe to drop now that inner/outer cells are dark + shrunk behind the stickers.
+
+---
+
+## 9. Stable centering
+
+**Stable centering (canonical frames + SO(4) geodesic).** The first centering composed a
+single-plane frame rotation per hop and committed the *composed* frame, so the free axes drifted:
+A→B→A could come back with a different face forward. Fix: each cell has a fixed **canonical
+frame** `frameForCell(i)`, forced right-handed (det +1 — swap the last two free axes when
+the naive frame is left-handed) so that *every* cell→cell relation is a proper SO(4)
+rotation. Centering interpolates that rotation along its geodesic via a **double-quaternion
+(van Elfrinkhof) factorization** `M = L(λ)·R(ρ)`, slerping λ and ρ from identity
+(`so4Decompose`/`so4Slerp` in `math4d.js`). This is smooth at *every* angle — crucially the
+180° opposite-cell hop, where a naive matrix/vector lerp passes through the zero vector and
+collapses. The animation **commits the destination's canonical frame exactly**, so revisits
+are bit-identical. Why all-same-handedness matters: mixed handedness would make some pairs
+an improper rotation (a reflection) with no continuous SO(4) path — uniform det +1 removes
+that. Single-plane centering is rejected for those two reasons (drift on revisits, no smooth
+180° hop); don't reintroduce it.

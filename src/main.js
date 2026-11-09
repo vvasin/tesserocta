@@ -1,6 +1,7 @@
 import { mat3Mul, mat3AxisRotation } from './math4d.js';
 import { buildSolvedPuzzle, undoMove } from './puzzle.js';
-import { computeCells, frameForCell } from './projection.js';
+import { computeCells,
+         frameForCell, cloneFrame, slerpFrame, centralFromFrame } from './projection.js';
 import { Renderer } from './renderer.js';
 import { AnimationEngine } from './animation.js';
 
@@ -13,6 +14,7 @@ class App {
     this.cubies = buildSolvedPuzzle();
     this.centralCellIndex = 0;
     this.coreFrame = frameForCell(this.centralCellIndex);    // explicit 4D core orientation
+    this.pendingCenter = null;                 // active centering { fromFrame, toFrame, toCi }
 
     // Turntable view: independent yaw/pitch so horizontal drag never leaks into roll.
     this.viewYaw   = DEFAULT_YAW;
@@ -25,6 +27,7 @@ class App {
 
     this.anim = new AnimationEngine();
     this.anim.onMoveComplete = (desc) => this._onMoveComplete(desc);
+    this.anim.onCentralComplete = () => this._onCentralComplete();
 
     this.dirty = true;                         // redraw flag (render only when needed)
 
@@ -45,7 +48,7 @@ class App {
   _loop(timestamp) {
     const frame = this.anim.tick(timestamp, this.cubies, this.centralCellIndex);
 
-    const busy = !this.anim.isIdle();
+    const busy = !this.anim.isIdle() || !!this.pendingCenter;
     if (this.dirty || busy) {
       this._render(frame);
       this.dirty = false;
@@ -54,7 +57,11 @@ class App {
   }
 
   _render(frame) {
+    // Core frame for this instant (interpolated during a centering animation).
     let coreFrame = this.coreFrame;
+    if (frame && frame.type === 'central' && this.pendingCenter) {
+      coreFrame = slerpFrame(this.pendingCenter.fromFrame, this.pendingCenter.toFrame, easeInOut(frame.t));
+    }
     const getState = frame && frame.type === 'move' ? frame.getState : null;
 
     const cells = computeCells(this.cubies, coreFrame, getState);
@@ -83,6 +90,29 @@ class App {
 
   _composeViewRot() {
     return mat3Mul(mat3AxisRotation(0, this.viewPitch), mat3AxisRotation(1, this.viewYaw));
+  }
+
+  // ── Centering (stable: always commits the destination's canonical frame) ──────
+
+  selectCentralCell(cellIndex) {
+    if (this.anim.isBusy()) return;
+    if (cellIndex === this.centralCellIndex && !this.pendingCenter) return;
+    this.pendingCenter = {
+      fromFrame: cloneFrame(this.coreFrame),
+      toFrame: frameForCell(cellIndex),
+      toCi: cellIndex,
+    };
+    this.anim.queueCentralCell(this.centralCellIndex, cellIndex);
+    this.centralCellIndex = cellIndex;
+    this.markDirty();
+  }
+
+  _onCentralComplete() {
+    if (!this.pendingCenter) return;
+    this.coreFrame = this.pendingCenter.toFrame;     // commit the exact canonical frame
+    this.centralCellIndex = centralFromFrame(this.coreFrame);
+    this.pendingCenter = null;
+    this.markDirty();
   }
 
   executeMove(cellIndex, planeName, sign) {
@@ -115,6 +145,8 @@ class App {
     this.markDirty();
   }
 }
+
+function easeInOut(t) { return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2; }
 
 // Bootstrap
 window.addEventListener('DOMContentLoaded', () => {

@@ -28,3 +28,20 @@ test('loads and renders a non-blank scene', async ({ page }) => {
   expect(brightPixels).toBeGreaterThan(2000);   // the puzzle actually drew
   expect(errors).toEqual([]);
 });
+
+test('central-cell switching is stable (returns to the same orientation)', async ({ page }) => {
+  await gotoApp(page);
+  const stable = await page.evaluate(async () => {
+    const a = window.__app;
+    const settled = () => new Promise(r => {
+      const t = setInterval(() => {
+        if (a.anim.isIdle() && !a.shuffling && !a.pendingCenter) { clearInterval(t); r(); }
+      }, 25);
+    });
+    a.anim.speedFactor = 6;
+    const start = JSON.stringify(a.coreFrame);     // canonical frame for cell 0 at boot
+    for (const c of [5, 2, 7, 0]) { a.selectCentralCell(c); await settled(); }
+    return JSON.stringify(a.coreFrame) === start;   // round-trip lands exactly back
+  });
+  expect(stable).toBe(true);
+});

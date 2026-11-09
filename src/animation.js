@@ -4,6 +4,7 @@ import { executeMove, CELLS } from './puzzle.js';
 import { PLANE_AXES, mat4Mul, mat4MulVec4, mat4PlaneRotation } from './math4d.js';
 
 const MOVE_DURATION       = 360; // ms per cell turn
+const TRANSITION_DURATION = 620; // ms for central-cell change
 
 export class AnimationEngine {
   constructor() {
@@ -11,10 +12,14 @@ export class AnimationEngine {
     this.active      = null;
     this.speedFactor = 1.0;
     this.onMoveComplete = null;
+    this.onCentralComplete = null;
   }
 
   queueMove(cubies, cellIndex, planeName, sign) {
     this.moveQueue.push({ type: 'move', cubies, cellIndex, planeName, sign });
+  }
+  queueCentralCell(fromCellIndex, toCellIndex) {
+    this.moveQueue.push({ type: 'central', fromCellIndex, toCellIndex });
   }
 
   tick(timestamp, cubies, centralCellIndex) {
@@ -38,6 +43,8 @@ export class AnimationEngine {
       return { type: 'move', getState, cellIndex: single ? a.cellIndex : -1,
                R: single ? mat4PlaneRotation(a.planeA, a.planeB, a.totalAngle * t) : null };
     }
+    // Centering: report raw progress; main eases + rotates the core frame.
+    return { type: 'central', fromCellIndex: a.fromCellIndex, toCellIndex: a.toCellIndex, t: rawT };
   }
 
   isIdle() { return !this.active && this.moveQueue.length === 0; }
@@ -66,6 +73,8 @@ export class AnimationEngine {
       });
 
       next.descriptor = executeMove(cubies, next.cellIndex, next.planeName, next.sign);
+    } else {
+      next.duration = TRANSITION_DURATION;
     }
     this.active = next;
   }
@@ -73,6 +82,7 @@ export class AnimationEngine {
   _finishActive() {
     const a = this.active;
     if ((a.type === 'move' || a.type === 'middle') && this.onMoveComplete) this.onMoveComplete(a.descriptor);
+    if (a.type === 'central' && this.onCentralComplete) this.onCentralComplete();
     this.active = null;
   }
 }

@@ -38,6 +38,7 @@ const a = window.__app;
 a.viewYaw = -0.6; a.viewPitch = 0.5; a.viewZoom = 1.4; a.viewRot = a._composeViewRot();
 a.anim.speedFactor = 0.1;           // slow animations down to capture mid-transition
 a.executeMove(2, 'XW', +1);         // cellIndex, planeName, sign (any cell/plane)
+a.selectCentralCell(4);             // animated, stable recentering
 a.coreFrame;                        // current 4D frame {e:[e0,e1,e2], eF} — at rest, a canonical frame
 ```
 To capture a specific moment in a turn, poll `a.anim.active` and compute progress from
@@ -57,7 +58,7 @@ every `errors == []` assertion in the specs.
 
 - `index.html` / `style.css` — the page shell. Mobile-first, `dvh` + safe-area insets; `#app` width = `min(100vw,100dvh)` (square-capped).
 - `src/main.js` — `App`: state, render loop (`_loop`/`_render`, dirty-flag redraw), view (yaw/pitch/zoom). Bootstraps `window.__app`.
-- `src/math4d.js` — 4×4 / 3×3 matrix + 4D vector helpers (`mat4PlaneRotation`, `mat4MulVec4`, `PLANE_AXES`, …).
+- `src/math4d.js` — 4×4 / 3×3 matrix + 4D vector helpers (`mat4PlaneRotation`, `mat4MulVec4`, `PLANE_AXES`, …) **+ the SO(4) geodesic** (`so4Slerp`, `so4Decompose`, `mat4Det`, `mat4FromCols`) used by stable centering.
 - `src/puzzle.js` — cubie model, `CELLS` (the 8 cells + colors), `executeMove`/`undoMove`.
 - `src/projection.js` — **the heart**: 4D→3D projection, cubie geometry, color fade, canonical frames. Almost all design decisions live here.
 - `src/renderer.js` — WebGL: opaque, depth-tested, **no back-face culling**. `beginFrame()` clears the whole canvas; `drawView(cells, viewRot, segments, camDist, rect, zoom)` renders one scissored viewport (`zoom` crops/magnifies without moving the camera) — called once per view.
@@ -94,6 +95,18 @@ screen x/y/z, plus a depth axis `eF` (the central-cell direction). `project(p) =
 [p·e0, p·e1, p·e2] · depthR(p·eF)`, with `depthR(w)=2.8−1.45w` (w=1→1.35 inner, 0→2.8,
 −1→4.25 outer). This is a Schlegel-style 4D perspective: the central cell is the small
 inner cube, the opposite cell the big enclosing one, the 6 others spread between.
+- **Centering is a 4D rotation of the FRAME**, not the cubies. Cubies hold still in 4D;
+  the viewpoint sweeps inside-out. `_render` interpolates `coreFrame` via `slerpFrame`;
+  `_onCentralComplete` commits it.
+- **Stable centering (the key invariant):** every cell has a fixed **canonical frame**
+  `frameForCell(i)`, forced right-handed (det +1) so any cell→cell move is a *proper* SO(4)
+  rotation. Centering interpolates along the **SO(4) geodesic** (`slerpFrame` → `so4Slerp`,
+  a double-quaternion / van Elfrinkhof factorization — smooth at every angle, including the
+  180° opposite-cell hop) and **commits the destination's canonical frame exactly**. So
+  revisiting a cell always lands on the identical orientation (A→B→A is bit-exact).
+  (**Single-plane centering was rejected:** composing one plane rotation per hop and
+  committing the composed frame let the free axes drift — A→B→A could return with a different
+  face forward — and the 180° opposite-cell hop was not smooth. Don't reintroduce it.)
 - Cubies with <2 nonzero coords are hidden (`isHidden`): the 8 cell-centers + 1 core
   cubie. So **72 cubies render**, not 80.
 

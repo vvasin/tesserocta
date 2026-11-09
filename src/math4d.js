@@ -91,6 +91,84 @@ export function mat4Det(m) {
   return det;
 }
 
+// ── SO(4) geodesic interpolation (double-quaternion / van Elfrinkhof) ──────────
+//
+// Any 4D rotation factors as M = L(λ)·R(ρ): left- and right-isoclinic rotations by
+// unit quaternions λ, ρ. Interpolating each quaternion from identity gives the
+// constant-speed geodesic — smooth for ANY angle, including the 180° opposite-cell
+// case that a naive matrix lerp can't do (it would pass through the zero vector).
+
+// Left-multiplication matrix L(λ) (column-major), λ=(a,b,c,d).
+function quatLeftMat(q) {
+  const [a, b, c, d] = q;
+  return new Float64Array([
+    a, b, c, d,        // col0
+   -b, a, d,-c,        // col1
+   -c,-d, a, b,        // col2
+   -d, c,-b, a,        // col3
+  ]);
+}
+// Right-multiplication matrix R(ρ) (column-major), ρ=(p,q,r,s).
+function quatRightMat(q) {
+  const [p, qq, r, s] = q;
+  return new Float64Array([
+    p, qq, r, s,       // col0
+   -qq, p,-s, r,       // col1
+   -r, s, p,-qq,       // col2
+   -s,-r, qq, p,       // col3
+  ]);
+}
+
+// Decompose a 4×4 rotation (column-major, det +1) into its two unit quaternions
+// λ, ρ. Uses the rank-1 associate matrix O = λ·ρᵀ recovered from M, then reads λ,ρ
+// off its largest row (robust at every angle). Global sign chosen for the shortest
+// geodesic (max λ₀+ρ₀ ⇒ min total isoclinic angle).
+export function so4Decompose(M) {
+  const m = (i, j) => M[j*4 + i];          // (row i, col j)
+  // Associate matrix O[i][j] = λ_i · ρ_j (16 closed-form combinations of M's entries).
+  const O = [
+    [ (m(0,0)+m(1,1)+m(2,2)+m(3,3))/4, (m(1,0)-m(0,1)+m(2,3)-m(3,2))/4, (m(2,0)-m(0,2)+m(3,1)-m(1,3))/4, (m(3,0)-m(0,3)+m(1,2)-m(2,1))/4 ],
+    [ (m(1,0)-m(0,1)-m(2,3)+m(3,2))/4, (m(2,2)+m(3,3)-m(0,0)-m(1,1))/4, (m(0,3)+m(3,0)-m(1,2)-m(2,1))/4, -(m(0,2)+m(2,0)+m(1,3)+m(3,1))/4 ],
+    [ (m(2,0)-m(0,2)-m(3,1)+m(1,3))/4, -(m(0,3)+m(3,0)+m(1,2)+m(2,1))/4, (m(1,1)+m(3,3)-m(0,0)-m(2,2))/4, (m(0,1)+m(1,0)-m(2,3)-m(3,2))/4 ],
+    [ (m(3,0)-m(0,3)-m(1,2)+m(2,1))/4, (m(0,2)+m(2,0)-m(1,3)-m(3,1))/4, -(m(0,1)+m(1,0)+m(2,3)+m(3,2))/4, (m(1,1)+m(2,2)-m(0,0)-m(3,3))/4 ],
+  ];
+  // ρ = the largest-norm row, normalized; λ_i = O[i]·ρ.
+  let bi = 0, bn = -1;
+  for (let i = 0; i < 4; i++) {
+    const n = O[i][0]**2 + O[i][1]**2 + O[i][2]**2 + O[i][3]**2;
+    if (n > bn) { bn = n; bi = i; }
+  }
+  let rho = O[bi].slice();
+  const rl = Math.hypot(rho[0], rho[1], rho[2], rho[3]) || 1;
+  rho = rho.map(v => v / rl);
+  const lam = O.map(row => row[0]*rho[0] + row[1]*rho[1] + row[2]*rho[2] + row[3]*rho[3]);
+  const ll = Math.hypot(lam[0], lam[1], lam[2], lam[3]) || 1;
+  const lambda = lam.map(v => v / ll);
+  // Shortest geodesic: pick the global sign (λ,ρ)→−(λ,ρ) that maximizes λ₀+ρ₀.
+  if (lambda[0] + rho[0] < 0) { for (let i = 0; i < 4; i++) { lambda[i] = -lambda[i]; rho[i] = -rho[i]; } }
+  return { qL: lambda, qR: rho };
+}
+
+// Slerp a unit quaternion from identity (1,0,0,0) to q by t.
+function quatSlerpFromIdentity(q, t) {
+  let w = Math.max(-1, Math.min(1, q[0]));
+  const theta = Math.acos(w);
+  const sin = Math.sin(theta);
+  if (sin < 1e-7) return [1, 0, 0, 0].map((v, i) => v*(1-t) + q[i]*t);  // ~identity
+  const s0 = Math.sin((1 - t) * theta) / sin;
+  const s1 = Math.sin(t * theta) / sin;
+  return [s0 + s1*q[0], s1*q[1], s1*q[2], s1*q[3]];
+}
+
+// Interpolate the rotation M (column-major SO(4)) from identity to M by t, along
+// the geodesic. so4Slerp(M, 0) = I, so4Slerp(M, 1) = M.
+export function so4Slerp(M, t) {
+  const { qL, qR } = so4Decompose(M);
+  const lt = quatSlerpFromIdentity(qL, t);
+  const rt = quatSlerpFromIdentity(qR, t);
+  return mat4Mul(quatLeftMat(lt), quatRightMat(rt));
+}
+
 // Apply a 90° plane rotation to an integer-grid vec4, snapped to avoid drift
 export function applyPlaneRotation90(v, a, b, sign) {
   const r = vec4Clone(v);
