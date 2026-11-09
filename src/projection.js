@@ -80,6 +80,15 @@ const CORE_EXT = 1;                    // lattice half-extent: core cell corners
 // spread out → gaps you can see the inner layers through).
 function depthR(w) { return 2.8 - 1.45 * w; }   // w=1→1.35, 0→2.8, −1→4.25
 
+// CLASSIC view: how far a side cell is pulled outward along its facing direction so the
+// per-cubie side stickers spread into the core-tesseract frustums (the exploded-cells look).
+// One depth level: pulling an inner-layer side cell by this lands it at the level the
+// middle-layer side cells occupy in normal mode (and middle → outer), since depthR is
+// linear so consecutive layers are an equal distance apart.
+export const PULL_DIST = depthR(0) - depthR(1);   // = 1.45 (also the grouped cluster's
+                                                  // uniform sticker-grid spacing — App's
+                                                  // classic swipe surfaces build on it)
+
 // ── 4D vector helpers ─────────────────────────────────────────────────────────
 
 function dot4(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3]; }
@@ -177,6 +186,7 @@ function cubieBoxes(cubie, center, orient, frame, targetOrient = orient, classic
   for (const sk of cubie.stickers) {
     for (let k = 0; k < 4; k++) if (sk.faceDir[k] !== 0) colorOf[k*2 + (sk.faceDir[k] > 0 ? 0 : 1)] = CELLS[sk.cellIndex].color;
   }
+  const pulling = classic && classic.mode === 'main' && classic.t > 0;
 
   const boxes = [];
   for (let a = 0; a < 4; a++) for (const s of [1, -1]) {
@@ -201,9 +211,69 @@ function cubieBoxes(cubie, center, orient, frame, targetOrient = orient, classic
     let ctr = [cx/8, cy/8, cz/8];
     for (let b = 0; b < 8; b++)                            // inset toward cell centre
       C8[b] = [ctr[0]+(C8[b][0]-ctr[0])*CUBIE_SHRINK, ctr[1]+(C8[b][1]-ctr[1])*CUBIE_SHRINK, ctr[2]+(C8[b][2]-ctr[2])*CUBIE_SHRINK];
+    // CLASSIC main view: rearrange side cells (df≈0) into tight core-tesseract frustums,
+    // size/shape preserved. Inner/outer cells (|df|≈1) are left in place (sideW≈0).
+    //   1) PULL OUT — translate outward along the cell's facing direction by PULL_DIST, so
+    //      each cell's layers detach from the centre (inner→middle level, middle→outer, …).
+    //   2) GROUP — compact the two in-face (tangential) axes onto a uniform PULL_DIST grid
+    //      so the cell reads as one tight cluster: the centre column stays put, the rest
+    //      shift toward the cell's centre axis (corners diagonally, edges h/v) — the same
+    //      step distance as the pull-out, both vertical and horizontal.
+    if (pulling) {
+      const sideW = 1 - smoothstep(0.2, 0.85, Math.abs(df));
+      if (sideW > 0.001) {
+        const w = classic.t * sideW;
+        const fc = freeComps(lnw, frame);                 // outward (facing) direction, projected
+        const mag = Math.hypot(fc[0], fc[1], fc[2]) || 1;
+        const dRad = PULL_DIST * w / mag;
+        const sh = [fc[0]*dRad, fc[1]*dRad, fc[2]*dRad];   // (1) radial pull-out along the facing dir
+        // (2) tangential grouping (opt-in, weighted by classic.group ∈ [0,1] so it eases in/out).
+        // Weight each screen axis by how PERPENDICULAR it is to the facing direction (`1 − f̂ₖ²`:
+        // 0 on the facing axis, 1 across it) instead of an argmax pick — so as the frame rotates
+        // during a recentering the split stays continuous and the stickers glide between clusters
+        // rather than snapping when the dominant axis flips.
+        const groupW = (classic.group == null ? 1 : classic.group) * w;
+        if (groupW > 0.001) for (let k = 0; k < 3; k++) {
+          const fk = fc[k] / mag;
+          const tangW = 1 - fk * fk;
+          const g = Math.max(-1, Math.min(1, dot4(center, frame.e[k])));   // in-face lattice coord
+          sh[k] += tangW * (g * PULL_DIST - cubieC[k]) * groupW;  // toward the uniform PULL_DIST grid
+        }
+        for (let b = 0; b < 8; b++) { C8[b][0] += sh[0]; C8[b][1] += sh[1]; C8[b][2] += sh[2]; }
+        ctr = [ctr[0]+sh[0], ctr[1]+sh[1], ctr[2]+sh[2]];
+      }
+    }
     boxes.push({ color: colorOf[a*2 + (s > 0 ? 0 : 1)] || null, C8, ctr, df, dft });
   }
   return { cubieC, boxes };
+}
+
+// CLASSIC view, per box: opacity multiplier. Classic shows only the cells that carry
+// the grouped-sticker look — the focused (inner) cell plus, in the main view, the pulled
+// side cells — and dithers the rest away:
+//   • uncolored ("unused") cells vanish entirely;
+//   • main view: the outer (−eF facing) cell vanishes (the big enclosing cube is dropped);
+//   • sub-views: every non-inner cell vanishes (only the cell's own 3×3 face remains).
+function classicHide(box, classic) {
+  if (!classic || classic.t <= 0) return 1;
+  if (!box.color) return 1 - classic.t;                          // unused cells: gone in classic
+  let hide;
+  if (classic.mode === 'sub') hide = 1 - smoothstep(0.2, 0.85, box.df);   // keep only the inner cell
+  else hide = classic.keepOuter ? 0 : smoothstep(0.2, 0.85, -box.df);     // drop the outer cell (unless kept)
+  return 1 - classic.t * hide;
+}
+
+// Sticker colour weight for a box. Normal mode times colour to the depth crossover
+// (colorWeight, the blackening). Classic mode disables that blackening — every shown
+// sticker reads at full colour — lerping there over the transition. Exception: when the
+// outer cell is being dropped (keepOuter off), it keeps its normal (black) weight so it
+// fades out BLACK rather than flashing its colour mid-transition.
+function classicColorWeight(box, classic) {
+  const w = box.color ? colorWeight(box.df, box.dft) : 0;
+  if (!classic || classic.t <= 0 || !box.color) return w;
+  let paint = classic.t;
+  if (classic.mode === 'main' && !classic.keepOuter) paint *= 1 - smoothstep(0.2, 0.85, -box.df);
+  return w + (1 - w) * paint;
 }
 
 // Emit the (camera-facing) quad faces of a cubie's 8 cell boxes into `faces`, at the
@@ -212,9 +282,9 @@ function cubieBoxes(cubie, center, orient, frame, targetOrient = orient, classic
 function pushBoxFaces(faces, boxes, opacity, classic = null) {
   for (const bx of boxes) {
     const C8 = bx.C8, ctr = bx.ctr;
-    const op = opacity;
+    const op = opacity * classicHide(bx, classic);
     if (op <= 0.004) continue;
-    const w = bx.color ? colorWeight(bx.df, bx.dft) : 0;
+    const w = classicColorWeight(bx, classic);
     const color = w <= 0 ? DARK
       : w >= 1 ? bx.color
       : [DARK[0]+(bx.color[0]-DARK[0])*w, DARK[1]+(bx.color[1]-DARK[1])*w, DARK[2]+(bx.color[2]-DARK[2])*w];
@@ -303,7 +373,8 @@ export function computeWireframe(cubies, frame, getState = null, { skipSolid = f
     if (opacity <= 0.02) return;
     const orient = st ? st.orient : cubie.orient;
     const { boxes } = cubieBoxes(cubie, center4, orient, frame, orient, classic);
-    for (const bx of boxes) pushBoxEdges(segs, bx.C8, bx.color || WIRE_UNUSED, WIRE_SHRINK, opacity);
+    // Classic hides/pulls per cell just like the solid path (edges dither out with it).
+    for (const bx of boxes) pushBoxEdges(segs, bx.C8, bx.color || WIRE_UNUSED, WIRE_SHRINK, opacity * classicHide(bx, classic));
   });
   return segs;
 }

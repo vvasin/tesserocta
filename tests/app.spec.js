@@ -92,6 +92,9 @@ test('persists puzzle, central cell, and settings across a reload', async ({ pag
     a.setSideMode('solid');
     a.setCoreWire(true);
     a.setControlSet('both');
+    a.setClassic(true);                            // classic-view flags also persist
+    a.setKeepOuter(true);
+    a.setGroupSides(false);
     document.getElementById('speed-slider').value = 8;
     document.getElementById('speed-slider').dispatchEvent(new Event('input'));
     a._scheduleSave.flush();                       // force the pending write out now
@@ -102,6 +105,9 @@ test('persists puzzle, central cell, and settings across a reload', async ({ pag
       sideMode: a.sideMode,
       coreWire: a.coreWire,
       controlSet: a.controlSet,
+      classic: a.classic,
+      keepOuter: a.keepOuter,
+      groupSides: a.groupSides,
       speed: parseInt(document.getElementById('speed-slider').value),
     };
   });
@@ -119,6 +125,9 @@ test('persists puzzle, central cell, and settings across a reload', async ({ pag
       sideMode: a.sideMode,
       coreWire: a.coreWire,
       controlSet: a.controlSet,
+      classic: a.classic,
+      keepOuter: a.keepOuter,
+      groupSides: a.groupSides,
       speed: parseInt(document.getElementById('speed-slider').value),
       speedFactor: a.anim.speedFactor,
     };
@@ -130,6 +139,9 @@ test('persists puzzle, central cell, and settings across a reload', async ({ pag
   expect(after.sideMode).toBe(before.sideMode);
   expect(after.coreWire).toBe(before.coreWire);
   expect(after.controlSet).toBe(before.controlSet);
+  expect(after.classic).toBe(before.classic);
+  expect(after.keepOuter).toBe(before.keepOuter);
+  expect(after.groupSides).toBe(before.groupSides);
   expect(after.speed).toBe(before.speed);
   expect(after.speedFactor).toBeCloseTo(before.speed / 5);
   expect(errors).toEqual([]);
@@ -254,5 +266,57 @@ test('twist buttons follow the view: button frame tracks screen slots across yaw
   });
   expect(r.slots).toEqual([true, true, true, true]);   // all quadrants track, top static
   expect(r.yawCell).not.toBe(r.restCell);              // button followed the view
+  expect(errors).toEqual([]);
+});
+
+test('classic view: defaults, always-available tuning options, and a clean recenter while active', async ({ page }) => {
+  const errors = await gotoApp(page);
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.waitForFunction(() => !!window.__app);
+  await page.waitForTimeout(200);
+
+  // Defaults: classic off, outer cell hidden, side-cell grouping on.
+  const defaults = await page.evaluate(() => ({
+    classic: window.__app.classic, keepOuter: window.__app.keepOuter, groupSides: window.__app.groupSides,
+  }));
+  expect(defaults).toEqual({ classic: false, keepOuter: false, groupSides: true });
+
+  // The two classic-tuning checkboxes stay ENABLED regardless of the classic state, so
+  // they can be preconfigured before switching the view on.
+  const gating = await page.evaluate(() => {
+    const a = window.__app;
+    const dis = () => [document.getElementById('outer-cell-toggle').disabled,
+                       document.getElementById('group-sides-toggle').disabled];
+    const off = dis();
+    a.setClassic(true);
+    return { off, on: dis() };
+  });
+  expect(gating.off).toEqual([false, false]);
+  expect(gating.on).toEqual([false, false]);
+
+  // Exercise the classic render paths: solid sides, a +X→+Y recenter (the complex rotation
+  // that used to snap), then toggle each tuning option — no errors, and the scene still draws.
+  const bright = await page.evaluate(async () => {
+    const a = window.__app;
+    const settled = () => new Promise(r => {
+      const t = setInterval(() => {
+        if (a.anim.isIdle() && !a.shuffling && !a.pendingCenter && !a._classicAnim && !a._groupAnim) { clearInterval(t); r(); }
+      }, 25);
+    });
+    a.anim.speedFactor = 6;
+    a.setSideMode('solid'); a.setClassic(true); await settled();
+    a.selectCentralCell(2);  await settled();        // +X → +Y complex centering in classic
+    a.setGroupSides(false);  await settled();        // ungroup (animated)
+    a.setKeepOuter(true);    await settled();        // reveal the outer cube
+    a.executeMove(2, 'XY', +1); await settled();     // a turn while classic + outer shown
+    const gl = a.renderer.gl, w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let n = 0;
+    for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 80) n++;
+    return n;
+  });
+  expect(bright).toBeGreaterThan(2000);
   expect(errors).toEqual([]);
 });
