@@ -35,6 +35,7 @@ interaction without console errors.
 
 ```
 index.html, style.css     entry point + styles
+src/                       app source (ES modules)
 scripts/serve.js           zero-dependency static dev server
 tests/                     Playwright specs
 playwright.config.js       test runner config (boots the dev server)
