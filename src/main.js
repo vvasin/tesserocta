@@ -4,7 +4,7 @@ import { computeCells, computeWireframe, computeCoreWireframe,
          frameForCell, cloneFrame, slerpFrame, centralFromFrame } from './projection.js';
 import { Renderer } from './renderer.js';
 import { AnimationEngine } from './animation.js';
-import { buildCellTiles, setCenteredTile } from './controls.js';
+import { Controls, buildCellTiles, setCenteredTile } from './controls.js';
 
 const DEFAULT_YAW  = -Math.PI / 5.5;         // resting turntable yaw; also the reference the twist
                                              // buttons orient against (their icons read right here)
@@ -62,8 +62,15 @@ class App {
     document.querySelectorAll('.cell-tile').forEach(el => { this.tileEls[+el.dataset.cell] = el; });
     setCenteredTile(this.centralCellIndex);
 
+    this.controls = new Controls(this.canvas, this);
+
     window.addEventListener('resize', () => this.markDirty());
     window.addEventListener('orientationchange', () => this.markDirty());
+    // iOS Safari ignores user-scalable=no, so block its pinch gesture from zooming the
+    // page (we handle zoom on the canvas ourselves; double-tap zoom is off via touch-action).
+    for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) {
+      document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+    }
 
     requestAnimationFrame(ts => this._loop(ts));
   }
@@ -164,6 +171,27 @@ class App {
     return mat3Mul(mat3AxisRotation(0, this.viewPitch), mat3AxisRotation(1, this.viewYaw));
   }
 
+  orbit(dYaw, dPitch) {
+    const maxPitch = Math.PI / 2;
+    this.viewYaw += dYaw;
+    this.viewPitch = Math.max(-maxPitch, Math.min(maxPitch, this.viewPitch + dPitch));
+    this.viewRot = this._composeViewRot();
+    this.markDirty();
+  }
+
+  zoomBy(factor) {
+    this.viewZoom = Math.max(0.5, Math.min(2.2, this.viewZoom * factor));
+    this.markDirty();
+  }
+
+  resetView() {
+    this.viewYaw = DEFAULT_YAW;
+    this.viewPitch = Math.PI / 7;
+    this.viewZoom = 1.0;
+    this.viewRot = this._composeViewRot();
+    this.markDirty();
+  }
+
   // ── Centering (stable: always commits the destination's canonical frame) ──────
 
   selectCentralCell(cellIndex) {
@@ -235,6 +263,12 @@ class App {
   setCoreWire(on) {
     this.coreWire = !!on;
     this.markDirty();
+  }
+
+  // Keyboard W toggles the central layer between solid and wireframe — the primary
+  // visual switch (side/core stay where the menu left them).
+  cycleViewMode() {
+    this.setCentralMode(this.centralMode === 'solid' ? 'wire' : 'solid');
   }
 }
 

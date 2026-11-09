@@ -8,6 +8,8 @@
 </head>
 <body>
   <div id="app">
+    <!-- Single GL canvas behind everything; the 9 views render into the tile/stage
+         rectangles below. Pointer events (orbit drag + tap-to-centre) land here. -->
     <canvas id="glcanvas"></canvas>
 
     <!-- 4 cell sub-views on top -->

@@ -214,4 +214,7 @@ or absent).
   introduces roll. `viewZoom` sets the camera distance (`MAIN_CAM/zoom`) shared by all 9
   views; sub-views additionally crop-zoom in (`SUBVIEW_ZOOM`) to fill their tile (same
   perspective as the main view). View changes never touch puzzle state.
+- **Keys** (desktop convenience): `1–8` centre cell · arrows rotate view · `V` reset view
+  · `W` toggle Central cell solid↔wireframe · `U`/`Shift+U` undo/redo. Pointer drag orbits;
+  tap a sub-view tile to centre it; wheel / two-finger pinch zoom.
 
