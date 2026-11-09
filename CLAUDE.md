@@ -43,6 +43,7 @@ a.centralStickers();                // the ≤27 swipe hit-areas (client-px quad
                                     // visible stickers
 a.applyCentralSwipe(start, x, y);   // turn the layer a swipe from sticker `start` exits toward (x,y)
 a.selectCentralCell(4);             // animated, stable recentering
+a.shuffle();                        // one-shot scramble (SHUFFLE_TURNS moves, full speed)
 a.setCentralMode('wire');           // focused layer: 'solid' | 'wire'
 a.setSideMode('none');              // side cells: 'semi' | 'solid' | 'wire' | 'none'
 a.setCoreWire(true);               // core-tesseract wireframe overlay on/off
@@ -65,7 +66,7 @@ every `errors == []` assertion in the specs.
 
 ## Files
 
-- `index.html` / `style.css` — the page shell. Mobile-first, `dvh` + safe-area insets; `#app` width = `min(100vw,100dvh)` (square-capped).
+- `index.html` / `style.css` — game shell: one full-area canvas, the 4-top/4-bottom cell tiles, the stage (menu button + the 4 twist-button groups), and the menu/confirm overlays. Mobile-first, `dvh` + safe-area insets; `#app` width = `min(100vw,100dvh)` (square-capped) so the main view grows on wide screens, with the cell strips capped/centered.
 - `src/main.js` — `App`: state, render loop (`_loop`/`_render`, dirty-flag redraw), view (yaw/pitch/zoom). Bootstraps `window.__app`.
 - `src/math4d.js` — 4×4 / 3×3 matrix + 4D vector helpers (`mat4PlaneRotation`, `mat4MulVec4`, `PLANE_AXES`, …) **+ the SO(4) geodesic** (`so4Slerp`, `so4Decompose`, `mat4Det`, `mat4FromCols`) used by stable centering.
 - `src/puzzle.js` — cubie model, `CELLS` (the 8 cells + colors), `executeMove`/`undoMove`.
@@ -222,7 +223,9 @@ or absent).
   views; sub-views additionally crop-zoom in (`SUBVIEW_ZOOM`) to fill their tile (same
   perspective as the main view). View changes never touch puzzle state.
 - **Turning**: all moves act on the **centred** cube; to work on another cell, tap its
-  sub-view to centre it first. Buttons sit in **groups framing the cube**:
+  sub-view to centre it first. Buttons sit in **4 groups framing the cube** (Settings →
+  Controls picks which show: `central` (default) / `sides` / `both` / `none` (zen — hide all,
+  twist by swiping)):
   - **bottom** — whole-cube rotation (`turnScreenPlane`): rotate the centred cell, 3 screen
     axes × 2 = 6.
   - **top / left / right** — per-axis **layer turns** (screen Y / X / Z), each = 3 slabs ×
@@ -272,7 +275,19 @@ or absent).
   **is** one of the puzzle's moves (its inverse is too) and the shuffle only uses cell turns,
   so every reachable state stays solvable. (`middleNetSign` returns 1 for the slab; the
   per-cubie-sign animation path is shared with normal moves.)
-- **Keys** (desktop convenience): `1–8` centre cell · arrows rotate view · `V` reset view
-  · `W` toggle Central cell solid↔wireframe · `U`/`Shift+U` undo/redo. Pointer drag orbits;
-  tap a sub-view tile to centre it; wheel / two-finger pinch zoom.
+- **Shuffle** (menu) is a **one-shot**: `SHUFFLE_TURNS` (20) clean side-cell turns on the
+  current centre — only the plane that avoids the depth axis, so never depth-involving —
+  recentering between rounds, run at full speed regardless of the speed slider. A candidate
+  that is the exact inverse of the previous turn (same cell + plane, opposite sign) is
+  rejected, so a turn and its undo never land back-to-back and waste two of the moves.
+- **Menu**: a scrollable body (`.menu-body`, header pinned) — **Shuffle + Reset (danger)** side by
+  side (`.menu-actions`, equal width) · Settings (animation speed slider, 9 odd steps so default
+  *medium* sits dead-centre; the multi-value groups lay options in two equal flex columns that
+  collapse to one on a narrow panel — `.opts`): Controls = Cube rotation (default) / Layer turns /
+  Both / None; Central cell = Solid (default) / Wireframe; Side cells = Semitransparent (default) /
+  Solid / Wireframe / None; *Display* = Core tesseract checkbox (default off).
+- **Keys** (desktop convenience): `1–8` centre cell · arrows rotate view · `R` reset puzzle
+  · `V` reset view · `W` toggle Central cell solid↔wireframe · `U`/`Shift+U` undo/redo. Pointer drag on the
+  centred cube swipes a layer (above); drag on the background/tiles orbits; tap a sub-view
+  tile to centre it; wheel / two-finger pinch zoom.
 

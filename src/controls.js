@@ -140,6 +140,7 @@ export class Controls {
       case 'ArrowRight': this.app.orbit( VIEW_STEP, 0); e.preventDefault(); break;
       case 'ArrowUp':    this.app.orbit(0, -VIEW_STEP); e.preventDefault(); break;
       case 'ArrowDown':  this.app.orbit(0,  VIEW_STEP); e.preventDefault(); break;
+      case 'r': case 'R': this.app.resetPuzzle(); break;
       case 'v': case 'V': this.app.resetView(); break;
       case 'w': case 'W': this.app.cycleViewMode(); break;
       case 'u': case 'U': e.shiftKey ? this.app.redo() : this.app.undo(); break;

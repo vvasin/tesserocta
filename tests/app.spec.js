@@ -29,6 +29,34 @@ test('loads and renders a non-blank scene', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('survives turns, shuffle, recenter, and view modes without errors', async ({ page }) => {
+  const errors = await gotoApp(page);
+  await page.evaluate(async () => {
+    const a = window.__app;
+    // Wait until nothing is animating, centering, or shuffling.
+    const settled = () => new Promise(r => {
+      const t = setInterval(() => {
+        if (a.anim.isIdle() && !a.shuffling && !a.pendingCenter) { clearInterval(t); r(); }
+      }, 25);
+    });
+    a.anim.speedFactor = 4;                       // run animations fast for the test
+    a.executeMove(2, 'XW', +1); await settled();  // depth-involving turn
+    a.executeMove(0, 'YZ', -1); await settled();
+    a.turnScreenPlane(0, 2, +1); await settled(); // a centred-cell twist via the button path
+    a.shuffle();                await settled();  // one-shot shuffle (20 turns, full speed)
+    a.selectCentralCell(5);     await settled();  // recentering
+    a.selectCentralCell(0);     await settled();
+    a.setCentralMode('wire'); a.setCoreWire(true);
+    a.executeMove(4, 'XY', +1); await settled();  // turn in all-wireframe + core mode
+    a.setSideMode('none');
+    a.executeMove(4, 'XY', -1); await settled();  // turn with side cells hidden
+    a.setCentralMode('solid'); a.setSideMode('wire'); a.setCoreWire(false);
+    a.resetPuzzle();
+  });
+  await page.waitForTimeout(200);
+  expect(errors).toEqual([]);
+});
+
 test('central-cell switching is stable (returns to the same orientation)', async ({ page }) => {
   await gotoApp(page);
   const stable = await page.evaluate(async () => {
@@ -101,6 +129,7 @@ test('swipe across the centred cube turns a layer; background swipe orbits', asy
 
 test('a swipe that exits the start sticker off the cube still turns (exit-direction model)', async ({ page }) => {
   const errors = await gotoApp(page);
+  await page.evaluate(() => window.__app.resetPuzzle());
 
   // Start on a face-centre sticker and drag straight outward, ending well OUTSIDE the cube
   // (and outside any sticker). The exit edge alone should resolve the turn.

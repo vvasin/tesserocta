@@ -13,6 +13,8 @@ const MAIN_CAM     = 15;                      // camera distance at zoom 1 (main
 const SUBVIEW_ZOOM = 2.4;                     // sub-views share the main camera distance and only
                                              // crop-zoom in to fill the tile (no distortion). Tuned
                                              // for zoom 1; sub-cubes scale with the main zoom.
+const SHUFFLE_TURNS = 20;                      // moves per Shuffle
+const SHUFFLE_SPEED = 2.0;                     // Shuffle always runs at full speed
 // View presentation = three independent settings (see _render). The central layer draws
 // solid or as wireframe; the side cells draw translucent, opaque, as wireframe or not at
 // all; the core-tesseract wireframe is a separate overlay.
@@ -64,6 +66,9 @@ class App {
     this.anim.onMoveComplete = (desc) => this._onMoveComplete(desc);
     this.anim.onCentralComplete = () => this._onCentralComplete();
 
+    this.shuffling = false;
+    this.shuffleQueue = [];
+
     this.dirty = true;                         // redraw flag (render only when needed)
 
     this.canvas = document.getElementById('glcanvas');
@@ -78,6 +83,7 @@ class App {
     setCenteredTile(this.centralCellIndex);
 
     this.controls = new Controls(this.canvas, this);
+    this._bindUI();
 
     window.addEventListener('resize', () => this.markDirty());
     window.addEventListener('orientationchange', () => this.markDirty());
@@ -95,9 +101,11 @@ class App {
   // ── Render loop ──────────────────────────────────────────────────────────────
 
   _loop(timestamp) {
+    if (this.shuffling && this.anim.isIdle()) this._shuffleStep();
+
     const frame = this.anim.tick(timestamp, this.cubies, this.centralCellIndex);
 
-    const busy = !this.anim.isIdle() || !!this.pendingCenter;
+    const busy = !this.anim.isIdle() || !!this.pendingCenter || this.shuffling;
     if (this.dirty || busy) {
       this._render(frame);
       this.dirty = false;
@@ -430,22 +438,101 @@ class App {
     this.markDirty();
   }
 
+  resetPuzzle() {
+    this._endShuffle();
+    this.anim.clearQueue();
+    this.cubies = buildSolvedPuzzle();
+    this.undoStack = [];
+    this.redoStack = [];
+    this.markDirty();
+  }
+
+  // Solved = every cubie home (pos4 === solvedPos4) with identity orientation. The
+  // frame/central cell doesn't matter — a solved puzzle reads solved from any cell.
+  isSolved() {
+    return this.cubies.every(c =>
+      c.pos4.every((v, i) => v === c.solvedPos4[i]) &&
+      c.orient.every((v, i) => Math.abs(v - (i % 5 === 0 ? 1 : 0)) < 1e-6));
+  }
+
+  // ── Shuffle (one-shot, fixed count, full speed) ──────────────────────────────
+
+  shuffle() {
+    if (this.anim.isBusy() || this.shuffling) return;
+    this.shuffleQueue = this._planShuffle(SHUFFLE_TURNS);
+    this.shuffling = true;
+    this._prevSpeed = this.anim.speedFactor;
+    this.anim.speedFactor = SHUFFLE_SPEED;
+    this.markDirty();
+  }
+
+  _endShuffle() {
+    if (!this.shuffling) return;
+    this.shuffling = false;
+    this.shuffleQueue = [];
+    if (this._prevSpeed != null) { this.anim.speedFactor = this._prevSpeed; this._prevSpeed = null; }
+    this.markDirty();
+  }
+
+  _shuffleStep() {
+    const act = this.shuffleQueue.shift();
+    if (!act) { this._endShuffle(); return; }
+    if (act.type === 'move') this.anim.queueMove(this.cubies, act.cellIndex, act.plane, act.sign);
+    else this.selectCentralCell(act.cellIndex);
+  }
+
+  // Build the full shuffle plan up front: rounds of 3–7 clean side-cell turns (never
+  // depth-involving) on the current centre, recentering to a different cell between
+  // rounds — the original scramble algorithm, bounded to ~n turns.
+  _planShuffle(n) {
+    const actions = [];
+    let central = this.centralCellIndex, last = null, made = 0;
+    while (made < n) {
+      const roundLen = Math.min(3 + Math.floor(Math.random() * 5), n - made);
+      const others = [0, 1, 2, 3].filter(a => a !== CELLS[central].axis);
+      for (let i = 0; i < roundLen; i++) {
+        let mv;
+        do {
+          const axis = others[Math.floor(Math.random() * 3)];
+          const cellVal = Math.random() < 0.5 ? 1 : -1;
+          const cellIndex = CELLS.findIndex(c => c.axis === axis && c.val === cellVal);
+          const [p, q] = others.filter(a => a !== axis);
+          mv = { type: 'move', cellIndex, plane: AXIS_LETTERS[p] + AXIS_LETTERS[q],
+                 sign: Math.random() < 0.5 ? 1 : -1 };
+        } while (last && mv.cellIndex === last.cellIndex && mv.plane === last.plane && mv.sign === -last.sign);
+        last = mv; actions.push(mv); made++;
+      }
+      if (made < n) {
+        let next = central; while (next === central) next = Math.floor(Math.random() * 8);
+        actions.push({ type: 'center', cellIndex: next });
+        central = next; last = null;
+      }
+    }
+    return actions;
+  }
+
   // ── Presentation settings (central / side / core) ─────────────────────────────
 
   setCentralMode(mode) {
     if (!CENTRAL_MODES.includes(mode)) return;
     this.centralMode = mode;
+    const radio = document.querySelector(`input[name="centralmode"][value="${mode}"]`);
+    if (radio) radio.checked = true;
     this.markDirty();
   }
 
   setSideMode(mode) {
     if (!SIDE_MODES.includes(mode)) return;
     this.sideMode = mode;
+    const radio = document.querySelector(`input[name="sidemode"][value="${mode}"]`);
+    if (radio) radio.checked = true;
     this.markDirty();
   }
 
   setCoreWire(on) {
     this.coreWire = !!on;
+    const box = document.getElementById('core-wire-toggle');
+    if (box) box.checked = this.coreWire;
     this.markDirty();
   }
 
@@ -458,6 +545,59 @@ class App {
   setControlSet(set) {
     this.controlSet = set;
     setControlSet(set);                        // module helper: show/hide the button groups
+  }
+
+  // ── UI binding ───────────────────────────────────────────────────────────────
+
+  _bindUI() {
+    const menu = document.getElementById('menu-overlay');
+    const confirm = document.getElementById('confirm-overlay');
+    const show = el => el.classList.remove('hidden');
+    const hide = el => el.classList.add('hidden');
+
+    document.getElementById('menu-button').addEventListener('click', () => show(menu));
+    document.getElementById('menu-close').addEventListener('click', () => hide(menu));
+    menu.addEventListener('click', e => { if (e.target === menu) hide(menu); });
+
+    // Shared confirm dialog: only prompt when there's progress to lose (puzzle not
+    // solved); otherwise run the action straight away.
+    const confirmP = confirm.querySelector('p');
+    const confirmOk = document.getElementById('confirm-ok');
+    const guard = (msg, okLabel, action) => {
+      if (this.isSolved()) { action(); return; }
+      confirmP.textContent = msg;
+      confirmOk.textContent = okLabel;
+      this._confirmAction = action;
+      show(confirm);
+    };
+
+    document.getElementById('btn-shuffle').addEventListener('click', () => {
+      hide(menu);
+      guard('Shuffle the puzzle? Your current progress will be lost.', 'Shuffle', () => this.shuffle());
+    });
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      hide(menu);
+      guard("Reset the puzzle to solved? This can't be undone.", 'Reset', () => this.resetPuzzle());
+    });
+
+    document.getElementById('confirm-cancel').addEventListener('click', () => hide(confirm));
+    confirmOk.addEventListener('click', () => { hide(confirm); if (this._confirmAction) this._confirmAction(); });
+    confirm.addEventListener('click', e => { if (e.target === confirm) hide(confirm); });
+
+    document.getElementById('speed-slider').addEventListener('input', e => {
+      this.anim.speedFactor = parseInt(e.target.value) / 5;   // 5 = 1×
+    });
+    for (const radio of document.querySelectorAll('input[name="centralmode"]')) {
+      radio.addEventListener('change', e => { if (e.target.checked) this.setCentralMode(e.target.value); });
+    }
+    for (const radio of document.querySelectorAll('input[name="sidemode"]')) {
+      radio.addEventListener('change', e => { if (e.target.checked) this.setSideMode(e.target.value); });
+    }
+    document.getElementById('core-wire-toggle')
+      .addEventListener('change', e => this.setCoreWire(e.target.checked));
+    for (const radio of document.querySelectorAll('input[name="controlset"]')) {
+      radio.addEventListener('change', e => { if (e.target.checked) this.setControlSet(e.target.value); });
+    }
   }
 }
 
