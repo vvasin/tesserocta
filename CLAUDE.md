@@ -42,5 +42,19 @@ every `errors == []` assertion in the specs.
 
 - `index.html` / `style.css` — the page shell. Mobile-first, `dvh` + safe-area insets; `#app` width = `min(100vw,100dvh)` (square-capped).
 - `src/math4d.js` — 4×4 / 3×3 matrix + 4D vector helpers (`mat4PlaneRotation`, `mat4MulVec4`, `PLANE_AXES`, …).
+- `src/puzzle.js` — cubie model, `CELLS` (the 8 cells + colors), `executeMove`/`undoMove`.
 - `scripts/serve.js` — zero-dep static dev server (sets ESM MIME types). `tests/` — Playwright specs. `playwright.config.js`, `eslint.config.js`, `package.json` — infra.
+
+## Puzzle model (`puzzle.js`)
+
+- 81 logical cubies, `pos4 ∈ {-1,0,1}⁴`. Each carries `pos4`, `solvedPos4`, `stickers`
+  (`{faceDir, cellIndex}`, `faceDir` is a LOCAL axis), `faceDirs` (current world dirs),
+  and `orient` (a 4×4 matrix = the cubie's own 4D orientation).
+- 8 **cells** = the tesseract's 3D facets, one per ±axis. `CELLS[i]` (i matches keys 1–8):
+  `+X`red `-X`orange `+Y`green `-Y`blue `+Z`yellow `-Z`white `+W`purple `-W`cyan.
+- A cubie belongs to every cell where `|pos4[axis]|==1` (1–4 stickers: cell-center →
+  hyper-corner). Cells genuinely **share** cubies; a move on one cell moves shared cubies.
+- **A cell turn is an absolute 4D rotation of the affected cubies** (`executeMove` rotates
+  `pos4`, `faceDirs`, and `orient` by `mat4PlaneRotation`). It never touches the frame.
+  Legal planes per cell axis: ±X→YZ,YW,ZW · ±Y→XZ,XW,ZW · ±Z→XY,XW,YW · ±W→XY,XZ,YZ.
 
