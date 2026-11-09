@@ -1,5 +1,6 @@
 import { mat3Mul, mat3AxisRotation, mat3MulVec3 } from './math4d.js';
-import { buildSolvedPuzzle, undoMove, CELLS } from './puzzle.js';
+import { buildSolvedPuzzle, undoMove, CELLS, serializeCubies, restoreCubies } from './puzzle.js';
+import { readState, writeState, debounce } from './persistence.js';
 import { computeCells, computeWireframe, computeCoreWireframe,
          frameForCell, cloneFrame, slerpFrame, centralFromFrame } from './projection.js';
 import { Renderer } from './renderer.js';
@@ -15,6 +16,7 @@ const SUBVIEW_ZOOM = 2.4;                     // sub-views share the main camera
                                              // for zoom 1; sub-cubes scale with the main zoom.
 const SHUFFLE_TURNS = 20;                      // moves per Shuffle
 const SHUFFLE_SPEED = 2.0;                     // Shuffle always runs at full speed
+const SAVE_DEBOUNCE = 500;                     // ms to coalesce persistence writes
 // View presentation = three independent settings (see _render). The central layer draws
 // solid or as wireframe; the side cells draw translucent, opaque, as wireframe or not at
 // all; the core-tesseract wireframe is a separate overlay.
@@ -27,6 +29,7 @@ const SIDE_ALPHA    = 0.4;                     // opacity floor for the 'semi' s
 // floor, 'solid' = fully opaque side cells (needed for the authentic classic view), and
 // 'wire'/'none' use 0 (handled by the wireframe/skip paths instead).
 const SIDE_FLOOR    = { semi: SIDE_ALPHA, solid: 1.0, wire: 0, none: 0 };
+const CONTROL_SETS  = ['central', 'sides', 'both', 'none'];   // 'none' = zen mode (no buttons)
 
 // Direct-manipulation swipe (turn the centred cube by dragging across its stickers).
 // A central-cell cubie always projects to a clean grid: pos4·eF = 1 → depthR(1) = 1.35
@@ -39,19 +42,25 @@ const MIN_STICKER_FRAC = 0.0006;             // drop stickers smaller than this 
                                              // ~0.0006 keeps all 27 readable at rest, dropping only
                                              // slivers as a face turns toward edge-on
 
+const isCellIndex = v => Number.isInteger(v) && v >= 0 && v < 8;
+
 class App {
   constructor() {
+    // Restore the previous session (puzzle, central cell, settings) if one was saved.
+    const saved = readState();
+
     this.cubies = buildSolvedPuzzle();
-    this.centralCellIndex = 0;
+    if (saved && !restoreCubies(this.cubies, saved.cubies)) this.cubies = buildSolvedPuzzle();
+    this.centralCellIndex = isCellIndex(saved?.central) ? saved.central : 0;
     this.coreFrame = frameForCell(this.centralCellIndex);    // explicit 4D core orientation
     this.subFrames = CELLS.map((_, i) => frameForCell(i));   // fixed canonical frame per sub-view
     this.pendingCenter = null;                 // active centering { fromFrame, toFrame, toCi }
     // Three independent presentation settings, defaulting to a solid centre,
     // semitransparent sides and no core overlay.
-    this.centralMode = 'solid';
-    this.sideMode    = 'semi';
-    this.coreWire    = false;
-    this.controlSet = 'central';
+    this.centralMode = CENTRAL_MODES.includes(saved?.centralMode) ? saved.centralMode : 'solid';
+    this.sideMode    = SIDE_MODES.includes(saved?.sideMode) ? saved.sideMode : 'semi';
+    this.coreWire    = typeof saved?.coreWire === 'boolean' ? saved.coreWire : false;
+    this.controlSet = CONTROL_SETS.includes(saved?.controlSet) ? saved.controlSet : 'central';
 
     // Turntable view: independent yaw/pitch so horizontal drag never leaks into roll.
     this.viewYaw   = DEFAULT_YAW;
@@ -84,6 +93,15 @@ class App {
 
     this.controls = new Controls(this.canvas, this);
     this._bindUI();
+    this._restoreSettingsUI(saved);
+
+    // Persistence: debounced writes coalesce bursts of turns / a shuffle into one save,
+    // and a pagehide flush captures the last move before the tab is backgrounded/closed.
+    this._scheduleSave = debounce(() => writeState(this._serialize()), SAVE_DEBOUNCE);
+    window.addEventListener('pagehide', () => this._scheduleSave.flush());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') this._scheduleSave.flush();
+    });
 
     window.addEventListener('resize', () => this.markDirty());
     window.addEventListener('orientationchange', () => this.markDirty());
@@ -228,6 +246,7 @@ class App {
     this.anim.queueCentralCell(this.centralCellIndex, cellIndex);
     this.centralCellIndex = cellIndex;
     setCenteredTile(cellIndex);
+    this._scheduleSave?.();
     this.markDirty();
   }
 
@@ -236,6 +255,7 @@ class App {
     this.coreFrame = this.pendingCenter.toFrame;     // commit the exact canonical frame
     this.centralCellIndex = centralFromFrame(this.coreFrame);
     this.pendingCenter = null;
+    this._scheduleSave?.();
     this.markDirty();
   }
 
@@ -419,6 +439,7 @@ class App {
       this.undoStack.push(descriptor);
       if (this.undoStack.length > 100) this.undoStack.shift();
     }
+    this._scheduleSave?.();
     this.markDirty();
   }
 
@@ -427,6 +448,7 @@ class App {
     const desc = this.undoStack.pop();
     undoMove(this.cubies, desc);
     this.redoStack.push(desc);
+    this._scheduleSave?.();
     this.markDirty();
   }
 
@@ -444,6 +466,7 @@ class App {
     this.cubies = buildSolvedPuzzle();
     this.undoStack = [];
     this.redoStack = [];
+    this._scheduleSave?.();
     this.markDirty();
   }
 
@@ -518,6 +541,7 @@ class App {
     this.centralMode = mode;
     const radio = document.querySelector(`input[name="centralmode"][value="${mode}"]`);
     if (radio) radio.checked = true;
+    this._scheduleSave?.();
     this.markDirty();
   }
 
@@ -526,6 +550,7 @@ class App {
     this.sideMode = mode;
     const radio = document.querySelector(`input[name="sidemode"][value="${mode}"]`);
     if (radio) radio.checked = true;
+    this._scheduleSave?.();
     this.markDirty();
   }
 
@@ -533,6 +558,7 @@ class App {
     this.coreWire = !!on;
     const box = document.getElementById('core-wire-toggle');
     if (box) box.checked = this.coreWire;
+    this._scheduleSave?.();
     this.markDirty();
   }
 
@@ -545,6 +571,46 @@ class App {
   setControlSet(set) {
     this.controlSet = set;
     setControlSet(set);                        // module helper: show/hide the button groups
+    this._scheduleSave?.();
+  }
+
+  // ── Persistence ───────────────────────────────────────────────────────────────
+
+  // Snapshot of everything that should outlive a refresh: the puzzle (mutable cubie
+  // fields), the centred cell, and the menu settings. View orientation is deliberately
+  // not persisted — it's transient, and resetting it on reload feels natural.
+  _serialize() {
+    return {
+      cubies: serializeCubies(this.cubies),
+      central: this.centralCellIndex,
+      centralMode: this.centralMode,
+      sideMode: this.sideMode,
+      coreWire: this.coreWire,
+      controlSet: this.controlSet,
+      speed: parseInt(document.getElementById('speed-slider').value),
+    };
+  }
+
+  // Reflect restored settings into the menu controls (and the animation speed). The puzzle,
+  // central cell, presentation settings and control set were already applied in the
+  // constructor; this only syncs the on-screen inputs and the speed factor.
+  _restoreSettingsUI(saved) {
+    const setRadio = (name, value) => {
+      const r = document.querySelector(`input[name="${name}"][value="${value}"]`);
+      if (r) r.checked = true;
+    };
+    setRadio('centralmode', this.centralMode);
+    setRadio('sidemode', this.sideMode);
+    setRadio('controlset', this.controlSet);
+    const coreBox = document.getElementById('core-wire-toggle');
+    if (coreBox) coreBox.checked = this.coreWire;
+
+    const slider = document.getElementById('speed-slider');
+    const speed = saved?.speed;
+    if (Number.isInteger(speed) && speed >= +slider.min && speed <= +slider.max) {
+      slider.value = speed;
+      this.anim.speedFactor = speed / 5;
+    }
   }
 
   // ── UI binding ───────────────────────────────────────────────────────────────
@@ -586,6 +652,7 @@ class App {
 
     document.getElementById('speed-slider').addEventListener('input', e => {
       this.anim.speedFactor = parseInt(e.target.value) / 5;   // 5 = 1×
+      this._scheduleSave?.();
     });
     for (const radio of document.querySelectorAll('input[name="centralmode"]')) {
       radio.addEventListener('change', e => { if (e.target.checked) this.setCentralMode(e.target.value); });

@@ -67,15 +67,16 @@ every `errors == []` assertion in the specs.
 ## Files
 
 - `index.html` / `style.css` — game shell: one full-area canvas, the 4-top/4-bottom cell tiles, the stage (menu button + the 4 twist-button groups), and the menu/confirm overlays. Mobile-first, `dvh` + safe-area insets; `#app` width = `min(100vw,100dvh)` (square-capped) so the main view grows on wide screens, with the cell strips capped/centered.
-- `src/main.js` — `App`: state, render loop (`_loop`/`_render`, dirty-flag redraw), view (yaw/pitch/zoom). Bootstraps `window.__app`.
+- `src/main.js` — `App`: state, **9-view render loop** (`_loop`/`_render`, dirty-flag redraw), view (yaw/pitch/zoom), stable centering, screen-plane→move dispatch (`turnScreenPlane`/`turnFace`/`turnMiddle`, against a view-following `_buttonFrame` for buttons), direct **swipe-to-turn** (`centralStickers`/`applyCentralSwipe`), shuffle, menu/view-mode wiring, **session persistence** (`_serialize`/`_restoreSettingsUI` + a debounced `_scheduleSave`). Bootstraps `window.__app`.
 - `src/math4d.js` — 4×4 / 3×3 matrix + 4D vector helpers (`mat4PlaneRotation`, `mat4MulVec4`, `PLANE_AXES`, …) **+ the SO(4) geodesic** (`so4Slerp`, `so4Decompose`, `mat4Det`, `mat4FromCols`) used by stable centering.
-- `src/puzzle.js` — cubie model, `CELLS` (the 8 cells + colors), `executeMove`/`undoMove`.
+- `src/puzzle.js` — cubie model, `CELLS` (the 8 cells + colors), `executeMove`/`undoMove`, the middle-slice (`executeMiddleMove`/`middleNetSign`), and persistence (de)serialization of the mutable cubie fields (`serializeCubies`/`restoreCubies`).
 - `src/projection.js` — **the heart**: 4D→3D projection, cubie geometry, color fade, wireframes (solid `computeCells` / wireframe `computeWireframe`, both keyed off the focused-layer weight `solidWeight` so they double as sub-views on a cell's own frame), canonical frames + `slerpFrame`, and the core-tesseract wireframe (`computeCoreWireframe`). Almost all design decisions live here.
 - `src/renderer.js` — WebGL: opaque, depth-tested, **no back-face culling**. `beginFrame()` clears the whole canvas; `drawView(cells, viewRot, segments, camDist, rect, zoom)` renders one scissored viewport (`zoom` crops/magnifies without moving the camera) — called once per view.
 - `src/animation.js` — `AnimationEngine`: move / middle-slice / centering queue, easing, per-frame state (per-cubie net sign for slices). `MOVE_DURATION=360ms`, `TRANSITION_DURATION=620ms`, `speedFactor`.
 - `src/controls.js` — unified pointer input: a drag that starts on a centred-cube sticker is a **layer swipe** (resolved via `App.centralStickers`/`applyCentralSwipe`) and never orbits; a drag that starts on the background or a cell tile orbits all views; tap a tile to centre that cell; pinch zoom. Plus keyboard; builds the cell tiles (`buildCellTiles`) and the 4 twist-button groups around the cube (`buildTurnControls`), shown/hidden by `setControlSet`.
 - `src/icons.js` — twist-button SVG icons, reconstructed in code from 4 hand-crafted base glyphs (full-cube / top / middle / bottom slab — a CCW rotation about the vertical axis) and derived by transform: opposite direction = mirror, other axis = rotate 120°/240° (the iso cube is 3-fold symmetric). Vertical axis = screen-Y. `turnIcon`/`TURN_BUTTONS` (cube rotation, `full`), `faceIcon` (outer `top`/`bottom` slab), `middleIcon` (middle slab). Arrow uses the accent colour; the cube uses `currentColor`.
 - `src/shaders.js` — GLSL. Two-sided lambert (`abs(dot(n,light))`), `u_ambient=0.42`; screen-door dither `discard` via an **ordered Bayer 8×8** threshold (uniform frosted stipple, not noise) — keeps each fragment with probability `a_opacity`, for the solid→wireframe dissolve and the translucent semitransparent side cells.
+- `src/persistence.js` — `localStorage` read/write (best-effort: any storage/parse failure is swallowed) + a `debounce(fn, ms)` helper with `.flush()`. See "Persistence" below.
 - `scripts/serve.js` — zero-dep static dev server (sets ESM MIME types). `tests/` — Playwright specs. `playwright.config.js`, `eslint.config.js`, `package.json` — infra.
 
 ## Puzzle model (`puzzle.js`)
@@ -290,4 +291,28 @@ or absent).
   · `V` reset view · `W` toggle Central cell solid↔wireframe · `U`/`Shift+U` undo/redo. Pointer drag on the
   centred cube swipes a layer (above); drag on the background/tiles orbits; tap a sub-view
   tile to centre it; wheel / two-finger pinch zoom.
+
+## Persistence (`persistence.js` + `App`)
+
+The session survives a refresh / reopened tab via `localStorage` (key
+`tesserocta/state/v1`). What's saved: the **puzzle** (only the mutable cubie fields —
+`pos4`, `faceDirs`, `orient`; the solved scaffold is rebuilt by `buildSolvedPuzzle` in the
+same deterministic order, so `restoreCubies` just overwrites those three per cubie), the
+**central cell index**, and the **settings** (speed-slider value, control set, the
+presentation settings — central mode, side mode, core-wireframe flag).
+
+- **Central cell is stored as an index, not a frame.** On load `coreFrame = frameForCell(central)`
+  — the canonical frame — so restore lands on the exact stable orientation the centering
+  invariant guarantees (never a mid-animation frame).
+- **View orientation (yaw/pitch/zoom) is intentionally NOT persisted** — transient turntable
+  state, reset on reload by design.
+- **Speed is read from the slider**, not `anim.speedFactor`, so a temporary shuffle-speed
+  override is never saved.
+- **Writes are debounced** (`SAVE_DEBOUNCE=500ms`): `_scheduleSave` is called at every state
+  mutation (move complete, centering commit, recenter, undo, reset, settings change) and
+  coalesces bursts / a shuffle into one write; flushed on `pagehide` and `visibilitychange→
+  hidden` so the last move isn't lost on mobile.
+- **Best-effort & defensive:** all storage/parse access is wrapped in try/catch (private mode,
+  quota, corruption are swallowed); `restoreCubies` validates shape and applies all-or-nothing,
+  and every restored setting/index is range-checked, falling back to the solved/default value.
 

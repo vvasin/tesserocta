@@ -74,6 +74,67 @@ test('central-cell switching is stable (returns to the same orientation)', async
   expect(stable).toBe(true);
 });
 
+test('persists puzzle, central cell, and settings across a reload', async ({ page }) => {
+  const errors = await gotoApp(page);
+  // Mutate every persisted facet, then let the debounced save flush on reload.
+  const before = await page.evaluate(async () => {
+    const a = window.__app;
+    const settled = () => new Promise(r => {
+      const t = setInterval(() => {
+        if (a.anim.isIdle() && !a.shuffling && !a.pendingCenter) { clearInterval(t); r(); }
+      }, 25);
+    });
+    a.anim.speedFactor = 4;
+    a.executeMove(2, 'XW', +1); await settled();
+    a.executeMove(0, 'YZ', -1); await settled();
+    a.selectCentralCell(5);     await settled();
+    a.setCentralMode('wire');
+    a.setSideMode('solid');
+    a.setCoreWire(true);
+    a.setControlSet('both');
+    document.getElementById('speed-slider').value = 8;
+    document.getElementById('speed-slider').dispatchEvent(new Event('input'));
+    a._scheduleSave.flush();                       // force the pending write out now
+    return {
+      cubies: JSON.stringify(a.cubies.map(c => Array.from(c.pos4))),
+      central: a.centralCellIndex,
+      centralMode: a.centralMode,
+      sideMode: a.sideMode,
+      coreWire: a.coreWire,
+      controlSet: a.controlSet,
+      speed: parseInt(document.getElementById('speed-slider').value),
+    };
+  });
+
+  await page.reload();
+  await page.waitForFunction(() => !!window.__app);
+  await page.waitForTimeout(200);
+
+  const after = await page.evaluate(() => {
+    const a = window.__app;
+    return {
+      cubies: JSON.stringify(a.cubies.map(c => Array.from(c.pos4))),
+      central: a.centralCellIndex,
+      centralMode: a.centralMode,
+      sideMode: a.sideMode,
+      coreWire: a.coreWire,
+      controlSet: a.controlSet,
+      speed: parseInt(document.getElementById('speed-slider').value),
+      speedFactor: a.anim.speedFactor,
+    };
+  });
+
+  expect(after.cubies).toBe(before.cubies);
+  expect(after.central).toBe(before.central);
+  expect(after.centralMode).toBe(before.centralMode);
+  expect(after.sideMode).toBe(before.sideMode);
+  expect(after.coreWire).toBe(before.coreWire);
+  expect(after.controlSet).toBe(before.controlSet);
+  expect(after.speed).toBe(before.speed);
+  expect(after.speedFactor).toBeCloseTo(before.speed / 5);
+  expect(errors).toEqual([]);
+});
+
 test('swipe across the centred cube turns a layer; background swipe orbits', async ({ page }) => {
   const errors = await gotoApp(page);
 
