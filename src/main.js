@@ -1,6 +1,6 @@
 import { mat3Mul, mat3AxisRotation } from './math4d.js';
 import { buildSolvedPuzzle, undoMove } from './puzzle.js';
-import { computeCells,
+import { computeCells, computeWireframe, computeCoreWireframe,
          frameForCell, cloneFrame, slerpFrame, centralFromFrame } from './projection.js';
 import { Renderer } from './renderer.js';
 import { AnimationEngine } from './animation.js';
@@ -8,6 +8,18 @@ import { AnimationEngine } from './animation.js';
 const DEFAULT_YAW  = -Math.PI / 5.5;         // resting turntable yaw; also the reference the twist
                                              // buttons orient against (their icons read right here)
 const MAIN_CAM     = 15;                      // camera distance at zoom 1 (main view default)
+// View presentation = three independent settings (see _render). The central layer draws
+// solid or as wireframe; the side cells draw translucent, opaque, as wireframe or not at
+// all; the core-tesseract wireframe is a separate overlay.
+const CENTRAL_MODES = ['solid', 'wire'];
+const SIDE_MODES    = ['semi', 'solid', 'wire', 'none'];
+const SIDE_ALPHA    = 0.4;                     // opacity floor for the 'semi' side cells —
+                                              // carried order-independently by the shader's
+                                              // ordered (Bayer) screen-door dither
+// Per side mode, the opacity floor passed to computeCells: 'semi' = translucent frosted
+// floor, 'solid' = fully opaque side cells (needed for the authentic classic view), and
+// 'wire'/'none' use 0 (handled by the wireframe/skip paths instead).
+const SIDE_FLOOR    = { semi: SIDE_ALPHA, solid: 1.0, wire: 0, none: 0 };
 
 class App {
   constructor() {
@@ -15,6 +27,11 @@ class App {
     this.centralCellIndex = 0;
     this.coreFrame = frameForCell(this.centralCellIndex);    // explicit 4D core orientation
     this.pendingCenter = null;                 // active centering { fromFrame, toFrame, toCi }
+    // Three independent presentation settings, defaulting to a solid centre,
+    // semitransparent sides and no core overlay.
+    this.centralMode = 'solid';
+    this.sideMode    = 'semi';
+    this.coreWire    = false;
 
     // Turntable view: independent yaw/pitch so horizontal drag never leaks into roll.
     this.viewYaw   = DEFAULT_YAW;
@@ -64,7 +81,38 @@ class App {
     }
     const getState = frame && frame.type === 'move' ? frame.getState : null;
 
-    const cells = computeCells(this.cubies, coreFrame, getState);
+    // Main view geometry, from the three presentation settings. The focused (central)
+    // layer is solid faces or wireframe edges; the side cells are translucent solids,
+    // wireframe edges, or nothing; the dither carries every central→side hand-off:
+    //   solid centre     → side semi : side cells are translucent solids (max(sw, α))
+    //   solid centre     → side wire : solid fades out over a full side wireframe
+    //   solid centre     → side none : solid fades out into nothing
+    //   wireframe centre → side semi : side solids fade out as the wireframe fades in
+    //   wireframe centre → side wire : edges at full opacity throughout — no transition
+    //   wireframe centre → side none : edges fade out into nothing
+    const centralWire = this.centralMode === 'wire';
+    const sideWire = this.sideMode === 'wire';
+    const sideFloor = SIDE_FLOOR[this.sideMode] || 0;     // 'semi'/'solid' opacity floor (else 0)
+    let cells = [];
+    let segments = [];
+    if (sideFloor > 0) {
+      // Floored side cells (translucent 'semi' or fully opaque 'solid'), order-independent
+      // via the screen-door dither. The centre stays a clean opaque solid, or — if set to
+      // wireframe — the side solids fade out as a cubie reaches the focused layer while its
+      // wireframe fades in.
+      cells = computeCells(this.cubies, coreFrame, getState, { sideAlpha: sideFloor, centralSolid: !centralWire });
+      if (centralWire) segments = computeWireframe(this.cubies, coreFrame, getState, { fade: true });
+    } else {
+      cells = centralWire ? [] : computeCells(this.cubies, coreFrame, getState);
+      if (centralWire && sideWire) segments = computeWireframe(this.cubies, coreFrame, getState);
+      else if (centralWire)        segments = computeWireframe(this.cubies, coreFrame, getState, { fade: true });
+      else if (sideWire)           segments = computeWireframe(this.cubies, coreFrame, getState, { skipSolid: true });
+    }
+    if (this.coreWire) {
+      const spinCell = frame && frame.type === 'move' ? frame.cellIndex : -1;
+      const spinR    = frame && frame.type === 'move' ? frame.R : null;
+      segments = segments.concat(computeCoreWireframe(coreFrame, [0, 1, 2, 3, 4, 5, 6, 7], spinCell, spinR));
+    }
 
     const r = this.renderer;
     const canvasRect = this.canvas.getBoundingClientRect();
@@ -74,7 +122,7 @@ class App {
 
     // Main tesseract view.
     const camDist = MAIN_CAM / this.viewZoom;
-    r.drawView(cells, this.viewRot, null, camDist, rectOf(this.stageEl));
+    r.drawView(cells, this.viewRot, segments, camDist, rectOf(this.stageEl));
   }
 
   // DOM element → GL device-pixel rect (origin bottom-left), relative to the canvas.
@@ -142,6 +190,25 @@ class App {
     if (this.anim.isBusy() || this.redoStack.length === 0) return;
     const desc = this.redoStack.pop();
     this.anim.queueMove(this.cubies, desc.cellIndex, desc.planeName, desc.sign);
+    this.markDirty();
+  }
+
+  // ── Presentation settings (central / side / core) ─────────────────────────────
+
+  setCentralMode(mode) {
+    if (!CENTRAL_MODES.includes(mode)) return;
+    this.centralMode = mode;
+    this.markDirty();
+  }
+
+  setSideMode(mode) {
+    if (!SIDE_MODES.includes(mode)) return;
+    this.sideMode = mode;
+    this.markDirty();
+  }
+
+  setCoreWire(on) {
+    this.coreWire = !!on;
     this.markDirty();
   }
 }

@@ -39,6 +39,9 @@ a.viewYaw = -0.6; a.viewPitch = 0.5; a.viewZoom = 1.4; a.viewRot = a._composeVie
 a.anim.speedFactor = 0.1;           // slow animations down to capture mid-transition
 a.executeMove(2, 'XW', +1);         // cellIndex, planeName, sign (any cell/plane)
 a.selectCentralCell(4);             // animated, stable recentering
+a.setCentralMode('wire');           // focused layer: 'solid' | 'wire'
+a.setSideMode('none');              // side cells: 'semi' | 'solid' | 'wire' | 'none'
+a.setCoreWire(true);               // core-tesseract wireframe overlay on/off
 a.coreFrame;                        // current 4D frame {e:[e0,e1,e2], eF} — at rest, a canonical frame
 ```
 To capture a specific moment in a turn, poll `a.anim.active` and compute progress from
@@ -136,12 +139,56 @@ swap hands off black-to-black, *without* ever blacking the whole puzzle:
   crossover. The trade (accepted): the moving cell vs *stationary side* collisions still
   snap, but the puzzle is never all-black. Centering uses the symmetric settled fade.
 
+### Presentation: focused layer vs side cells (three independent settings)
+
+How the tesseract reads is **three independent menu settings**, all hung off one quantity —
+the focused-layer weight `solidWeight = smoothstep(0.4, 0.9, pos4·eF)` (1 = central layer,
+→0 outward), which slides continuously as the frame sweeps (centering) or a cubie crosses the
+layer (a turn whose plane includes the central axis):
+
+- **Central cell** = `solid` (default) or `wire` — how the `sw≈1` cubies draw.
+- **Side cells** = `semi` (default) / `solid` / `wire` / `none` — how the `sw≈0` cubies draw. `semi`
+  draws them as **translucent solids** (the whole tesseract reads as nested frosted cubes); `solid`
+  draws them **fully opaque** (`SIDE_FLOOR.solid=1.0` — the floor path with α=1; needed for the
+  authentic classic view); `wire` as edges; `none` hides them.
+- **Core tesseract** wireframe = on/off — the separate `computeCoreWireframe` overlay (default off).
+
+The default (solid centre, semitransparent sides, no core) shows the focused 3×3×3 as a clean
+opaque 3×3×3 cube with the rest of the tesseract as see-through frosted cubes around it (`wire`
+sides gives a solid cube inside an edges-only surround). `computeCells` takes `{sideAlpha, centralSolid}`: with `sideAlpha=0`
+(default) only the focused layer is solid (`opacity=sw`, skips `sw≤0.02`); with `sideAlpha>0` and a
+solid centre the sides are floored translucent (`opacity=max(sw, sideAlpha)`, `SIDE_ALPHA=0.4`); with
+`sideAlpha>0` and a wire centre the solid is the side role only (`opacity=sideAlpha·(1−sw)`), fading
+out as a cubie reaches the focused layer. `computeWireframe` options — `skipSolid` drops the cubies
+the solid centre fully covers (`sw≥0.98`), `fade` sets `opacity=sw` so a *wireframe* cubie can
+dissolve out too.
+
+Every **central→side hand-off is carried by the screen-door dither** (the shader keeps each
+fragment — face *or* line — with probability `opacity`, no alpha blending, depth buffer
+untouched):
+
+| central → side | how it transitions |
+|---|---|
+| solid → semi | solid faces dither down to a translucent floor (`sw`→`SIDE_ALPHA`) — never vanish *(default)* |
+| solid → wire | solid faces dither out over a full-opacity side wireframe *(solid cube in an edges-only surround)* |
+| solid → none | solid faces dither out **into nothing** |
+| wire → semi | side solids dither out as the central wireframe fades in |
+| wire → wire | edges stay at full opacity throughout — **no** transition |
+| wire → none | edges dither out **into nothing** (`fade`) |
+
 ### Other rendering facts
 
 - **No back-face culling** (`renderer.js`). The depth buffer handles occlusion; culling
   used to delete a face as it went edge-on, leaving see-through holes between the cubie's
   separate cell boxes. Removing it makes cubies stay solid at grazing angles.
 - `DARK=[0.10,0.10,0.13]` for non-sticker faces; background `[0.04,0.04,0.06]`.
+- **Core-tesseract wireframe** (the *Core tesseract* checkbox; `W` toggles the Central cell
+  mode solid↔wire) — `computeCoreWireframe` draws the 8 core cells as cube outlines, the active
+  cell spinning during a turn, all rotating during centering. The core cell corners sit exactly
+  on the corner-cubie centers (`CORE_EXT=1`); side cells inset inward, the inside-out outer cell
+  insets **outward** so it encloses its cubies. It's an independent overlay now, so a full
+  wireframe inspection = Central `wire` + Side `wire` + Core on. (Only the **main view** shows
+  the core overlay; sub-views never do.)
 
 ## View, modes, controls
 

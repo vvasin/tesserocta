@@ -63,6 +63,19 @@ function colorWeight(df, dft) {
   return sideColorWeight(df);                                       // settled / stationary side
 }
 
+// How "solid" a cubie is vs wireframe (normal mode): the central cell renders solid,
+// the outer layers as wireframe. Driven by depth along the central axis,
+// d = pos4·eF (1 = central cell, 0/−1 = outer), which slides continuously as the
+// frame sweeps (centering) or the cubie moves across the layer (turns). The solid is
+// dithered away by this weight, revealing the wireframe underneath during the handoff.
+const SOLID_LO = 0.4, SOLID_HI = 0.9;
+function solidWeight(p, frame) {
+  return smoothstep(SOLID_LO, SOLID_HI, dot4(p, frame.eF));
+}
+
+const CORE_EXT = 1;                    // lattice half-extent: core cell corners sit on the
+                                       // ±1 corner-cubie centres (projected identically)
+
 // Centre radius vs depth (cubies keep constant size, so deeper shells just
 // spread out → gaps you can see the inner layers through).
 function depthR(w) { return 2.8 - 1.45 * w; }   // w=1→1.35, 0→2.8, −1→4.25
@@ -145,9 +158,14 @@ function freeComps(v, frame) {
 // The 6 faces of a box, corner index b = p0|p1<<1|p2<<2 over the 3 perp axes.
 const BOX_FACES = [[1,3,7,5],[0,2,6,4],[2,3,7,6],[0,1,5,4],[4,5,7,6],[0,1,3,2]];
 
+const BOX_EDGES = [[0,1],[0,2],[0,4],[1,3],[1,5],[2,3],[2,6],[3,7],[4,5],[4,6],[5,7],[6,7]];
+const WIRE_UNUSED = [0.30, 0.33, 0.40];   // colour of an "unused" (non-sticker) cell in wireframe
+const WIRE_SHRINK = 0.95;                 // cell wireframes a touch smaller → don't collapse together
+
 // Internal: the 8 projected cell BOXES of one cubie, drawn as the cubie's own
 // little Schlegel tesseract (inner small cube, outer big cube, 6 side frustums),
 // each inset toward its centroid. color is the sticker colour or null (unused).
+// Shared by the solid and wireframe renderers so they always agree.
 //
 // The outer cell self-hides: it shares each outer face with a side cell, but its
 // centroid is the cubie centre (far from those faces), so the SAME inset pulls its
@@ -214,13 +232,28 @@ function pushBoxFaces(faces, boxes, opacity, classic = null) {
 }
 
 // Solid render: each cubie's cell boxes → outward (camera-facing) quad faces.
+//
+// Per-cubie opacity is set by the focused-layer weight `sw` (1 = central, 0 = side) and
+// the side policy:
+//   • sideAlpha = 0 (default): only the focused layer is solid (opacity = sw); side
+//     cubies fall below the cutoff and drop out — the classic solid-centre look.
+//   • sideAlpha > 0, centralSolid: side cells become translucent solids floored at
+//     sideAlpha (opacity = max(sw, sideAlpha)) — the semitransparent mode. The screen-
+//     door dither makes them see-through with no sorting (order-independent).
+//   • sideAlpha > 0, !centralSolid: the centre is drawn as wireframe elsewhere, so the
+//     solid is the side role only — it fades OUT as a cubie reaches the focused layer
+//     (opacity = sideAlpha·(1−sw)) while the wireframe fades in.
 export function computeCells(cubies, frame, getState = null, { sideAlpha = 0, centralSolid = true, classic = null } = {}) {
   const faces = [];
   cubies.forEach((cubie, i) => {
     if (isHidden(cubie.pos4)) return;
     const st = getState ? getState(i) : null;
     const center4 = st ? st.center4 : cubie.pos4;
-    const opacity = 1;
+    const sw = solidWeight(center4, frame);   // 0 = pure side, 1 = focused layer
+    const opacity = sideAlpha <= 0 ? sw
+      : centralSolid ? Math.max(sw, sideAlpha)
+      : sideAlpha * (1 - sw);
+    if (opacity <= 0.02) return;
     // Pass the committed orientation as the target so each cell knows whether it's
     // heading toward the side role (revealing) or toward inner/outer (hiding).
     const { boxes } = cubieBoxes(
@@ -228,4 +261,78 @@ export function computeCells(cubies, frame, getState = null, { sideAlpha = 0, ce
     pushBoxFaces(faces, boxes, opacity, classic);
   });
   return faces;
+}
+
+// ── Wireframes (debug / perception) ───────────────────────────────────────────
+
+// Push the 12 edges of an 8-corner box, shrunk toward its centre, as segments at the
+// given opacity (the renderer screen-door dithers lines just like solid faces, so a
+// wireframe cubie can fade to nothing as it leaves the focused layer).
+function pushBoxEdges(out, C8, color, shrink, opacity = 1) {
+  let cx=0,cy=0,cz=0;
+  for (const p of C8) { cx+=p[0]; cy+=p[1]; cz+=p[2]; }
+  cx/=8; cy/=8; cz/=8;
+  const V = C8.map(p => [cx+(p[0]-cx)*shrink, cy+(p[1]-cy)*shrink, cz+(p[2]-cz)*shrink]);
+  for (const [i,j] of BOX_EDGES) out.push({ a: V[i], b: V[j], color, opacity });
+}
+
+// Wireframe render: every cubie cell as its own (slightly shrunk) cube wireframe,
+// coloured by its sticker cell or as "unused". Options select the role this wireframe
+// plays against the focused-layer weight `sw = solidWeight` (1 = central, 0 = side):
+//   • skipSolid — drop cubies the solid centre fully covers (sw ≥ 0.98), so the side-cell
+//     wireframe only shows where there is no solid on top of it (central solid + side wire).
+//   • fade — opacity = sw, so a wireframe cubie dithers OUT as it slides to the side role
+// Without either flag every cubie is drawn opaque — a flat all-wireframe inspection.
+export function computeWireframe(cubies, frame, getState = null, { skipSolid = false, fade = false, classic = null } = {}) {
+  const segs = [];
+  cubies.forEach((cubie, i) => {
+    if (isHidden(cubie.pos4)) return;
+    const st = getState ? getState(i) : null;
+    const center4 = st ? st.center4 : cubie.pos4;
+    const sw = solidWeight(center4, frame);
+    if (skipSolid && sw >= 0.98) return;        // the solid cube covers this cubie
+    const opacity = fade ? sw : 1;
+    if (opacity <= 0.02) return;
+    const orient = st ? st.orient : cubie.orient;
+    const { boxes } = cubieBoxes(cubie, center4, orient, frame, orient, classic);
+    for (const bx of boxes) pushBoxEdges(segs, bx.C8, bx.color || WIRE_UNUSED, WIRE_SHRINK, opacity);
+  });
+  return segs;
+}
+
+// The 8 core-tesseract cells, each a (slightly shrunk) cube wireframe in its cell
+// colour. During a turn the active cell's cube is rotated by the live move R, so
+// the big cell visibly rotates in sync with its cubies.
+// Render the core cell boxes that are currently in motion only — there is no
+// static full-core wireframe. `cellList` are the cell indices to draw; `spinCell`
+// (if given) gets the live turn rotation R applied. Recentering rotation comes
+// for free through the interpolated `frame` the caller passes in.
+export function computeCoreWireframe(frame, cellList, spinCell = -1, R = null) {
+  const segs = [];
+  for (const ci of cellList) {
+    const ax = CELLS[ci].axis, val = CELLS[ci].val;
+    const free = [0,1,2,3].filter(a => a !== ax);
+    const spin = (ci === spinCell) ? R : null;
+    const C8 = [];
+    for (let b = 0; b < 8; b++) {
+      const v = [0,0,0,0];
+      v[ax] = val * CORE_EXT;
+      v[free[0]] = ((b&1)?1:-1) * CORE_EXT;
+      v[free[1]] = ((b&2)?1:-1) * CORE_EXT;
+      v[free[2]] = ((b&4)?1:-1) * CORE_EXT;
+      C8.push(project(spin ? mat4MulVec4(spin, v) : v, frame));
+    }
+    const c = CELLS[ci].color;
+    const col = [Math.min(1, c[0]*0.5+0.5), Math.min(1, c[1]*0.5+0.5), Math.min(1, c[2]*0.5+0.5)];
+    // Separation inset. Most cells shrink toward their centroid. The OUTER cell is
+    // inside-out (its centre projects to the origin, its corners to the far hull),
+    // so shrinking it inward reads as "too small / inside the boundary" — it must
+    // grow outward instead. Key the inset on depth facing (+1 central, 0 side,
+    // −1 outer) so it flips smoothly through a recentering rather than popping.
+    const depthSign = dot4(unit4(ax, val), frame.eF);
+    const inset = 1 - WIRE_SHRINK;
+    const shrink = depthSign >= 0 ? WIRE_SHRINK : WIRE_SHRINK - 2 * inset * depthSign;
+    pushBoxEdges(segs, C8, col, shrink);
+  }
+  return segs;
 }

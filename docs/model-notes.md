@@ -46,7 +46,8 @@ frustums) so a cubie is self-similar to the core. The outer cell is **inside-out
 center projects to the cubie center, its corners to the far hull); the `CUBIE_SHRINK`
 inset toward each cell's centroid therefore pulls the outer cell's faces *inward* far
 more than the side faces move, so it self-hides behind the side stickers with no
-z-fighting.
+z-fighting. That same inside-out property is used *inverted* for the wireframe core,
+where the outer cell must **enclose** its cubies, so it insets outward.
 
 ---
 
@@ -140,6 +141,10 @@ wanted lit. *Lesson: a face's 4D normal direction is not its 3D screen orientati
 transparency for depth (unreadable "translucent hell"); per-axis "lobe" rendering
 (read as 18 cells per cell). All abandoned for opaque depth-nesting + the color fade.
 
+**Hashed dither.** The screen-door threshold was first a per-pixel hash. Fine for a brief
+dissolve, but at a steady partial coverage it reads as TV static; replaced by the ordered
+Bayer 8×8 threshold (§8).
+
 ---
 
 ## 6. Counterintuitive geometric facts (each cost real time)
@@ -149,7 +154,12 @@ transparency for depth (unreadable "translucent hell"); per-axis "lobe" renderin
   normal. (This is what sank the per-face fade.)
 - **The outer cell is inside-out.** Center → projection origin, corners → far hull. So
   shrinking it *toward* its centroid moves its visible boundary *outward*. Used as a
-  feature (cubie outer cell self-hides).
+  feature (cubie outer cell self-hides) and inverted for the wireframe core (must
+  enclose).
+- **Inflating a depth coordinate through `depthR` inverts sizing.** The `CORE_EXT=1.5`
+  wireframe bug: feeding `val·1.5` (instead of `±1`) into the nonlinear `depthR` made
+  the inner core cell *shrink* and the outer one *balloon*. Fix: `CORE_EXT=1`, so core
+  cell corners are the *same* projected points as the corner-cubie centers.
 
 ---
 
@@ -164,6 +174,52 @@ transparency for depth (unreadable "translucent hell"); per-axis "lobe" renderin
 - **No back-face culling.** The depth buffer handles occlusion; culling deleted faces
   as they went edge-on, leaving see-through holes between a cubie's separate cell
   boxes. Safe to drop now that inner/outer cells are dark + shrunk behind the stickers.
+
+---
+
+## 8. Focused layer solid, outer layers see-through
+
+The full opaque render is a wall of cubes — the outer shells occlude the central cell you
+care about. So only the **central cell is solid**; in the `wire` side mode every outer-layer
+cubie becomes **wireframe** (the default `semi` mode is described below). This is the "transparency" the translucent-fills approach (§5)
+failed to deliver — but as structural *edges*, not blended fills, so it stays readable.
+
+`solidWeight = smoothstep(0.4, 0.9, pos4·eF)` is the central-ness: it's `pos4`'s depth
+along the central axis, already continuous through both events that change membership
+(centering sweeps `eF`; a layer-crossing turn moves the animated `center4`). In steady
+state every cubie is cleanly 0 or 1 — so **no blending is needed there**; only the
+mid-animation band has both representations at once.
+
+For that handoff we chose **screen-door dither** over an alpha cross-fade: the shader
+`discard`s fragments with probability `1−solidWeight`, so the fading solid pokes holes
+that reveal the wireframe (drawn just behind it, slightly shrunk). It needs no back-to-
+front sorting and leaves the opaque depth pipeline untouched — the alpha route would have
+re-introduced the sorting/blending fragility we spent §1–§7 avoiding. The dither pattern
+is screen-space and stable per pixel, so a cubie dissolves cleanly rather than sparkling.
+
+### Semitransparent side cells (the default) — same dither, lower floor
+
+The `none` (hide sides) and `wire` (edges only) side modes left a gap: a *translucent*
+look where the whole tesseract reads as nested frosted cubes. The naive version — render
+every cubie's 8 cell boxes with true alpha — is exactly the "translucent hell" of §5: with
+72 cubies × 8 nested cells × 6 faces there is no correct back-to-front order (the inner and
+outer cells of one cubie interpenetrate), and near-coplanar cubies colliding during a
+central↔side transition z-fight. **Weighted-blended OIT** would solve the ordering and
+(with depth writes off) kill the z-fight, but it needs MRT + half-float targets — risky on
+mobile WebGL 1 and a lot of framebuffer machinery for a no-build project.
+
+So `semi` reuses the **same screen-door dither**, just with a floor: side cubies draw as
+solids at `opacity = max(sw, SIDE_ALPHA)` (`SIDE_ALPHA=0.4`) instead of being dropped. It's
+order-independent for free (writes depth, no blend), and the stochastic discard turns the
+transition z-fight into a stipple rather than a shimmering plane — it *mitigates* the fight
+without eliminating it (depth is still written; true elimination would need OIT with depth
+writes off). To make 40% coverage read as **frosted glass instead of TV static**, the
+shader's per-pixel hash was replaced with an **ordered Bayer 8×8** threshold (recursive
+2→4→8, no array indexing — WebGL-1 friendly). The handoff stays continuous: a cubie leaving
+the focused layer fades `sw`→`SIDE_ALPHA` and never vanishes. (With a *wireframe* centre the
+side solid instead fades to nothing as the centre wireframe fades in: `opacity =
+SIDE_ALPHA·(1−sw)`.) If the stipple ever proves unacceptable, WBOIT is the documented
+upgrade path.
 
 ---
 
