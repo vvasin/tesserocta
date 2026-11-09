@@ -116,7 +116,11 @@ html, body {
   backdrop-filter: blur(6px);
 }
 .grid-3col { grid-template-columns: repeat(3, auto); }
+.grid-2col { grid-template-columns: repeat(2, auto); }
+#turn-top    { top: 8px;    left: 50%; transform: translateX(-50%); }
 #turn-bottom { bottom: 8px; left: 50%; transform: translateX(-50%); }
+#turn-left   { left: 8px;   top: 50%;  transform: translateY(-50%); }
+#turn-right  { right: 8px;  top: 50%;  transform: translateY(-50%); }
 .turn-btn {
   width: 40px;
   height: 40px;
@@ -144,3 +148,5 @@ button {
 }
 button:active:not(:disabled) { background: #2a2a36; }
 button:disabled { opacity: 0.4; cursor: default; }
+
+.hidden { display: none !important; }

@@ -4,7 +4,7 @@ import { computeCells, computeWireframe, computeCoreWireframe,
          frameForCell, cloneFrame, slerpFrame, centralFromFrame } from './projection.js';
 import { Renderer } from './renderer.js';
 import { AnimationEngine } from './animation.js';
-import { Controls, buildCellTiles, buildTurnControls, setCenteredTile } from './controls.js';
+import { Controls, buildCellTiles, buildTurnControls, setCenteredTile, setControlSet } from './controls.js';
 
 const AXIS_LETTERS = ['X', 'Y', 'Z', 'W'];   // 4D axis index → plane-name letter
 const DEFAULT_YAW  = -Math.PI / 5.5;         // resting turntable yaw; also the reference the twist
@@ -38,6 +38,7 @@ class App {
     this.centralMode = 'solid';
     this.sideMode    = 'semi';
     this.coreWire    = false;
+    this.controlSet = 'central';
 
     // Turntable view: independent yaw/pitch so horizontal drag never leaks into roll.
     this.viewYaw   = DEFAULT_YAW;
@@ -60,6 +61,7 @@ class App {
 
     buildCellTiles();
     buildTurnControls(this);
+    setControlSet(this.controlSet);
     this.tileEls = [];
     document.querySelectorAll('.cell-tile').forEach(el => { this.tileEls[+el.dataset.cell] = el; });
     setCenteredTile(this.centralCellIndex);
@@ -281,6 +283,19 @@ class App {
     return { planeName: AXIS_LETTERS[a] + AXIS_LETTERS[b], sign: dir * (p < q ? 1 : -1) * si * sj * par };
   }
 
+  // Turn the MIDDLE layer of the central cube along screen axis `kScreen` (a true
+  // middle slice — only the centred cube's middle ring moves; see executeMiddleMove).
+  turnMiddle(kScreen, dir, frame = null) {
+    if (this.anim.isBusy() || this.anim.moveQueue.length >= 3) return;
+    const f = frame || frameForCell(this.centralCellIndex);
+    const fAxis = nonzeroAxis(f.e[kScreen]);
+    const [i, j] = [0, 1, 2].filter(x => x !== kScreen);
+    const { planeName, sign } = this._screenPlaneMove(f, i, j, dir);
+    this.anim.queueMiddle(this.cubies, this.centralCellIndex, fAxis, planeName, sign);
+    this.redoStack = [];
+    this.markDirty();
+  }
+
   executeMove(cellIndex, planeName, sign) {
     if (this.anim.moveQueue.length >= 3) return;   // queue up to 3 ahead
     this.anim.queueMove(this.cubies, cellIndex, planeName, sign);
@@ -307,7 +322,8 @@ class App {
   redo() {
     if (this.anim.isBusy() || this.redoStack.length === 0) return;
     const desc = this.redoStack.pop();
-    this.anim.queueMove(this.cubies, desc.cellIndex, desc.planeName, desc.sign);
+    if (desc.type === 'middle') this.anim.queueMiddle(this.cubies, desc.centralCellIndex, desc.fAxis, desc.planeName, desc.sign);
+    else this.anim.queueMove(this.cubies, desc.cellIndex, desc.planeName, desc.sign);
     this.markDirty();
   }
 
@@ -334,6 +350,11 @@ class App {
   // visual switch (side/core stay where the menu left them).
   cycleViewMode() {
     this.setCentralMode(this.centralMode === 'solid' ? 'wire' : 'solid');
+  }
+
+  setControlSet(set) {
+    this.controlSet = set;
+    setControlSet(set);                        // module helper: show/hide the button groups
   }
 }
 

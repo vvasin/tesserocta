@@ -66,7 +66,7 @@ every `errors == []` assertion in the specs.
 - `src/puzzle.js` — cubie model, `CELLS` (the 8 cells + colors), `executeMove`/`undoMove`.
 - `src/projection.js` — **the heart**: 4D→3D projection, cubie geometry, color fade, wireframes (solid `computeCells` / wireframe `computeWireframe`, both keyed off the focused-layer weight `solidWeight` so they double as sub-views on a cell's own frame), canonical frames + `slerpFrame`, and the core-tesseract wireframe (`computeCoreWireframe`). Almost all design decisions live here.
 - `src/renderer.js` — WebGL: opaque, depth-tested, **no back-face culling**. `beginFrame()` clears the whole canvas; `drawView(cells, viewRot, segments, camDist, rect, zoom)` renders one scissored viewport (`zoom` crops/magnifies without moving the camera) — called once per view.
-- `src/animation.js` — `AnimationEngine`: move queue, easing, per-frame state. `MOVE_DURATION=360ms`, `speedFactor`.
+- `src/animation.js` — `AnimationEngine`: move / middle-slice / centering queue, easing, per-frame state (per-cubie net sign for slices). `MOVE_DURATION=360ms`, `TRANSITION_DURATION=620ms`, `speedFactor`.
 - `src/controls.js` — pointer + keyboard input and the DOM builders for the game shell (cell tiles, twist buttons).
 - `src/icons.js` — twist-button SVG icons, reconstructed in code from 4 hand-crafted base glyphs (full-cube / top / middle / bottom slab — a CCW rotation about the vertical axis) and derived by transform: opposite direction = mirror, other axis = rotate 120°/240° (the iso cube is 3-fold symmetric). Vertical axis = screen-Y. `turnIcon`/`TURN_BUTTONS` (cube rotation, `full`), `faceIcon` (outer `top`/`bottom` slab), `middleIcon` (middle slab). Arrow uses the accent colour; the cube uses `currentColor`.
 - `src/shaders.js` — GLSL. Two-sided lambert (`abs(dot(n,light))`), `u_ambient=0.42`; screen-door dither `discard` via an **ordered Bayer 8×8** threshold (uniform frosted stipple, not noise) — keeps each fragment with probability `a_opacity`, for the solid→wireframe dissolve and the translucent semitransparent side cells.
@@ -220,6 +220,11 @@ or absent).
   sub-view to centre it first. Buttons sit in **groups framing the cube**:
   - **bottom** — whole-cube rotation (`turnScreenPlane`): rotate the centred cell, 3 screen
     axes × 2 = 6.
+  - **top / left / right** — per-axis **layer turns** (screen Y / X / Z), each = 3 slabs ×
+    2 dirs:
+    - outer slabs (`turnFace(kScreen, sSide, dir)`) — turn the **side cell** on that face in
+      the depth-avoiding plane = an ordinary cube face turn (same family the shuffle uses).
+    - middle slab (`turnMiddle(kScreen, dir)`) — see "Middle slice" below.
   Every button is a STATIC icon, but its **target follows the view**: the icons depict a cube
   cornered edge-toward-you showing a front-left, front-right, and top face, and the buttons
   resolve against `_buttonFrame()` — the canonical frame with its two **horizontal** axes
@@ -233,6 +238,16 @@ or absent).
   `(planeName, sign)`; its permutation-parity factor makes `dir=+1` always a right-handed CCW
   turn about the +screen axis (matching the icon arrow) — without it the Y plane (0,2), being
   cyclically odd, comes out inverted.
+- **Middle slice** (`turnMiddle` → `executeMiddleMove`): rotate the whole **`fAxis=0`
+  hyper-slab** — every cubie with `pos4[fAxis]=0` (27: the centred cube's middle layer + the
+  adjacent cells' middle slices in that plane), in the slice plane. It's the slab *between*
+  the two side cells ±f, so **top-slab(+f) + middle + bottom-slab(−f), same direction, equal
+  a whole-puzzle reorientation** (solved stays solved) — the key consistency the design
+  requires; the slab-axis cells ±f stay untouched. On the centred cube the faces stay still
+  and the middle ring turns. Like an M/E/S slice it isn't a product of cell turns, but it
+  **is** one of the puzzle's moves (its inverse is too) and the shuffle only uses cell turns,
+  so every reachable state stays solvable. (`middleNetSign` returns 1 for the slab; the
+  per-cubie-sign animation path is shared with normal moves.)
 - **Keys** (desktop convenience): `1–8` centre cell · arrows rotate view · `V` reset view
   · `W` toggle Central cell solid↔wireframe · `U`/`Shift+U` undo/redo. Pointer drag orbits;
   tap a sub-view tile to centre it; wheel / two-finger pinch zoom.
