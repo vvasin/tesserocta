@@ -254,3 +254,70 @@ are bit-identical. Why all-same-handedness matters: mixed handedness would make 
 an improper rotation (a reflection) with no continuous SO(4) path — uniform det +1 removes
 that. Single-plane centering is rejected for those two reasons (drift on revisits, no smooth
 180° hop); don't reintroduce it.
+
+---
+
+## 10. The swipe surface: idealized quads, not rendered geometry
+
+Direct manipulation (`centralStickers`/`applyCentralSwipe`) never reads back what was
+drawn. The hit surface is an **idealized model** of where the stickers are — a handful
+of quads projected to client pixels through the renderer's *exact* camera parameters
+(frame, `viewRot`, zoom, FOV). This works because the relevant geometry is exactly
+predictable: a central-layer cubie always projects to a clean grid (`pos4·eF = 1` →
+constant `depthR(1)`), and classic's pull/group offsets are closed-form. Rebuilding
+~27 quads per pointer-down is negligible; hit-testing rendered geometry would mean
+occlusion queries or CPU-side replication of `cubieBoxes` — all cost, no benefit.
+
+Three properties make the tiny model sufficient:
+
+- **Logical lattice coords, not positions, drive the move.** Each quad carries `g` =
+  the cubie's `pos4·e` along the 3 screen axes. The swipe resolver needs only: drag
+  axis (dominant in-face tangent), rotation axis (the *other* tangent), slab (`g`
+  along it: 0 → `turnMiddle`, ±1 → `turnFace`). Where the quad *sits* is irrelevant to
+  *which* move fires — position only decides which quad you grabbed and the sign.
+- **Every reachable move is a rigid rotation of a hyper-slab about a screen axis
+  through the origin.** So the "grabbed sticker travels with the finger" sign test is
+  one cross product: `dir = sign((r̂ × c3)[dragAxis])` with `c3` the quad's true
+  projected-3D centre. On the centred cube this is *provably identical* to the older
+  face-normal test `r̂ × n̂` (only the face-normal component of `c3` survives along the
+  drag axis) — but the position form also holds for quads that sit **off** the rotation
+  axis, which is what classic relocation needs. If you ever add swipe targets anywhere
+  else, keep the `c3` form; the normal form silently breaks off-axis (that is how the
+  first classic attempt got the far-side caps wrong).
+- **Only camera-oriented faces are emitted** (per-quad `normal·toCam > 0`, plus the
+  `MIN_STICKER_FRAC` sliver cull). In classic the exploded layout has see-through gaps —
+  you can *see* the far cells' stickers from behind; they must not react. Culling at
+  emission time keeps `_pickSticker` a dumb nearest-`zc` point-in-poly scan.
+
+**The classic-sync design question — and two rejected generalizations.** When classic
+relocates the side stickers, where should the controls go? Two "cover everything you
+can see" models were built and then **dropped**:
+
+1. **Grouped clusters as full swipe cubes** — each grouped side cell modelled as its
+   own idealized 3×3×3 (all 6 faces). It works, and its side faces even gave a natural
+   "spin this cell in place" gesture (rotation axis = the cell's facing axis — legal
+   because a cell turn moves the whole cell, so every sticker of a cluster shares
+   `g[facing] = cell sign`). Rejected: it multiplied targets (~150 quads), covered the
+   view (killing orbit space), and didn't match the ungrouped layout at all.
+2. **Ungrouped layer sheets** — each side cell as three radially-facing 3×3 sheets
+   (tangential spread `depthR(d)` per depth layer). Also works; also rejected — 81+
+   targets, and middle/outer-layer stickers became controls that have no counterpart
+   in normal mode.
+
+**The final model is the spec the game actually wants:** the control areas are *always
+the same ≤27 stickers* — the central-layer cubies' side stickers. Normal mode: they
+tile the centred cube's 3 visible faces. Classic (settled): the *same* areas relocate
+with those stickers to the **inner sheet** of each side cell — sticker plane
+`1.5·STICKER_GRID` → `+ PULL_DIST`, tangential spacing sliding `STICKER_GRID →
+PULL_DIST` with the **live** `groupT` (one lerp covers grouped, ungrouped, and the
+grouping animation in between). Same count, same identity, same slab/axis/sign per
+area; the old cube-face locations stop being controls (the centre region orbits), and
+middle/outer-layer stickers never react. *Lesson: "synchronize the controls" meant
+"move the existing controls", not "add controls to everything visible" — the ≤27
+invariant is the design, matching normal mode's mental model exactly.*
+
+Related earlier decision, same shape: the **exit-edge** gesture model (which edge of
+the start sticker the drag leaves through) was chosen over "start sticker + end
+sticker" because it classifies cleanly when a swipe wraps over a cube edge onto
+another face of the same cubie, or runs off into empty space. Press-time decides the
+gesture: a drag born on a sticker never orbits.

@@ -1,7 +1,7 @@
 import { mat3Mul, mat3AxisRotation, mat3MulVec3 } from './math4d.js';
 import { buildSolvedPuzzle, undoMove, CELLS, serializeCubies, restoreCubies } from './puzzle.js';
 import { readState, writeState, debounce } from './persistence.js';
-import { computeCells, computeWireframe, computeCoreWireframe,
+import { computeCells, computeWireframe, computeCoreWireframe, PULL_DIST,
          frameForCell, cloneFrame, slerpFrame, centralFromFrame } from './projection.js';
 import { Renderer } from './renderer.js';
 import { AnimationEngine } from './animation.js';
@@ -43,6 +43,9 @@ const MIN_STICKER_FRAC = 0.0006;             // drop stickers smaller than this 
                                              // main-view area (edge-on / heavily foreshortened);
                                              // ~0.0006 keeps all 27 readable at rest, dropping only
                                              // slivers as a face turns toward edge-on
+// In the settled classic view the SAME ≤27 areas relocate with the central cubies' side
+// stickers: pulled PULL_DIST out along each cell's facing axis, tangential spacing sliding
+// STICKER_GRID→PULL_DIST with the grouping weight (see centralStickers).
 
 const isCellIndex = v => Number.isInteger(v) && v >= 0 && v < 8;
 
@@ -386,9 +389,25 @@ class App {
 
   // ── Direct manipulation: swipe across the stickers to turn a layer ─────────────
 
-  // The interaction surface: the ≤27 visible stickers of the centred cube, as idealized
-  // quads projected to CLIENT pixels through the renderer's exact camera (so they track
-  // orientation + zoom). Returns [] while busy — the caller falls back to orbiting.
+  // The interaction surface: the ≤27 visible side stickers of the CENTRAL-LAYER cubies,
+  // as idealized quads projected to CLIENT pixels through the renderer's exact camera
+  // (so they track orientation + zoom). In normal mode those stickers form the centred
+  // cube's faces; in the settled classic view THE SAME AREAS relocate to where classic
+  // draws those stickers — the pulled-out inner sheet of each side cell, one depth level
+  // above the cube (compacted tangentially by the live grouping weight). Same ≤27 areas,
+  // same meaning per area, different location; the old cube-face locations stop being
+  // controls, and the side cells' middle/outer-layer stickers never are.
+  // Each sticker carries its lattice coord `g` along screen x/y/z (the central cubie's
+  // pos4·e — in classic, `g` along the sheet's facing axis is the cell's sign, i.e. the
+  // cubie the sticker belongs to), the face it lives on (axis `a`, sign `sa`), the two
+  // in-face tangent axes `t`, its centre `c3` in projected 3D (pre-view-rotation — the
+  // drift-sign lever arm), its screen depth `zc` (smaller = nearer), and `cluster`
+  // ({k, s} of the side cell in classic, else null).
+  // Only faces ORIENTED TO THE CAMERA are emitted (per-quad normal·toCam test) and
+  // heavily-foreshortened ones are dropped, so a swipe only ever lands on a visible
+  // face — classic's see-through gaps never expose a rear-facing swipe target. Returns
+  // [] while busy (no geometry to twist mid-animation) — the caller falls back to
+  // orbiting.
   centralStickers() {
     if (this.anim.isBusy() || this.pendingCenter) return [];
     const rect = this.stageEl.getBoundingClientRect();
@@ -410,6 +429,8 @@ class App {
     const out = [];
     // One sticker quad: centre `fc` (projected 3D), face-normal axis `a` (sign `sa`),
     // in-face tangent axes t0/t1 with half-size `half`, logical lattice coord `g`.
+    // Only camera-oriented faces are emitted, so classic's see-through gaps never
+    // expose a rear-facing swipe target.
     const pushQuad = (fc, a, sa, t0, t1, half, g, cluster) => {
       const nWorld = mat3MulVec3(R, axisVec(a, sa));    // face normal, view-rotated
       const cWorld = mat3MulVec3(R, fc);
@@ -422,6 +443,29 @@ class App {
       if (polyArea2(poly) < minArea) return;            // edge-on / too small to target
       out.push({ g, a, sa, t: [t0, t1], poly, zc: proj(fc).zc, c3: fc, cluster });
     };
+    if (this.classicT > 0.999) {
+      // CLASSIC (settled): the same ≤27 sticker areas, relocated. A central cubie's side
+      // sticker is pulled one depth level out along its cell's facing axis (the sticker
+      // surface goes from the cube-face plane to that plane + PULL_DIST) and compacted
+      // tangentially from the cubie grid toward the PULL_DIST grouping lattice by the
+      // LIVE groupT — so the areas track the grouping animation too. With side cells
+      // hidden ('none') classic draws no side stickers, so there are no swipe areas.
+      if (this.sideMode === 'none') return out;
+      const spread = STICKER_GRID + (PULL_DIST - STICKER_GRID) * this.groupT;
+      const radial = STICKER_GRID * 1.5 + PULL_DIST;    // cube-face plane, pulled one level out
+      for (let k = 0; k < 3; k++) for (const s of [1, -1]) {
+        const [t0, t1] = [0, 1, 2].filter(x => x !== k);
+        for (let u = -1; u <= 1; u++) for (let v = -1; v <= 1; v++) {
+          const fc = [0, 0, 0];
+          fc[k] = s * radial; fc[t0] = u * spread; fc[t1] = v * spread;
+          const g = [0, 0, 0]; g[k] = s; g[t0] = u; g[t1] = v;
+          pushQuad(fc, k, s, t0, t1, spread / 2, g, { k, s });
+        }
+      }
+      return out;
+    }
+    // NORMAL mode (and the brief classic transition): the centred cube's own surface —
+    // a 3×3×3 grid, one quad per visible sticker on the cube faces.
     const half = STICKER_GRID / 2;                      // half a cell → stickers tile continuously
     for (let a = 0; a < 3; a++) for (const sa of [1, -1]) {
       const [t0, t1] = [0, 1, 2].filter(x => x !== a);
@@ -465,7 +509,10 @@ class App {
     const r    = useT0 ? t1 : t0;             // rotation axis = the other tangent
     // Drift sign: the sticker's slab rotates rigidly about the r̂ SCREEN axis (through
     // the origin), so its velocity is dir·(r̂ × c3) — pick dir so the component along the
-    // dragged tangent matches the finger.
+    // dragged tangent matches the finger. On the centred cube this reduces exactly to
+    // the old r̂ × n̂ face-normal test (only c3's face-normal component survives along
+    // tIdx); using the true position also covers the classic clusters, whose cubes sit
+    // OFF the tangential rotation axes (there the lever arm is the cluster offset).
     const cr = cross3v(axisVec(r, 1), start.c3);
     const dirSign = Math.sign(cr[tIdx]);
     if (!dirSign) return false;               // degenerate (never for real stickers)

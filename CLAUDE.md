@@ -40,7 +40,8 @@ a.anim.speedFactor = 0.1;           // slow animations down to capture mid-trans
 a.executeMove(2, 'XW', +1);         // cellIndex, planeName, sign (any cell/plane)
 a.turnScreenPlane(0, 2, +1);        // twist the CENTRED cell via a screen-plane button (iIdx,jIdx,dir)
 a.centralStickers();                // the ≤27 swipe hit-areas (client-px quads): the centred cube's
-                                    // visible stickers
+                                    // visible stickers — relocated to the side cells' pulled-out
+                                    // inner sheets while the classic view is settled
 a.applyCentralSwipe(start, x, y);   // turn the layer a swipe from sticker `start` exits toward (x,y)
 a.selectCentralCell(4);             // animated, stable recentering
 a.shuffle();                        // one-shot scramble (SHUFFLE_TURNS moves, full speed)
@@ -239,7 +240,9 @@ recomputed in the live frame each tick.
 - The **depth blackening is disabled** (`classicColorWeight` lerps `colorWeight`→1): every shown sticker
   reads full colour. The transition uses the **same screen-door dither** (unused/outer cells dissolve;
   side cells morph out). Classic composes with the side mode (opacity/style) — the **authentic** look is
-  Side cells = `solid`; with `semi` the frustums are translucent.
+  Side cells = `solid`; with `semi` the frustums are translucent. Once the classic tween has settled
+  the **≤27 swipe areas relocate with the stickers they sit on** — to the pulled-out inner sheet of
+  each side cell (see "Swipe to turn") — so the controls stay on the faces the player actually sees.
 - **Outer cell** (*Classic view* group → *Outer cell*; `keepOuter`, default off, main view only). Off:
   the outer core cell (big enclosing cube) is dropped — and `classicColorWeight` keeps it at its normal
   **black** weight while it dithers out, so it doesn't flash its colour mid-transition. On: it isn't
@@ -312,6 +315,20 @@ recomputed in the live frame each tick.
   that **runs off into empty space**. **Press-time decides the gesture:** a drag begun on a sticker
   only ever turns — it never orbits, and if it never leaves the start sticker it's simply ignored;
   a drag begun on the background/tiles orbits as before.
+  **Classic view sync:** while the classic tween is settled, **the same ≤27 areas relocate with
+  the stickers they sit on**. A central cubie's side sticker is pulled one depth level out along
+  its cell's facing axis, so the areas move from the cube's faces to the 6 **inner sheets** (the
+  sticker-surface plane goes from `1.5·STICKER_GRID` to that + `PULL_DIST`; tangential spacing
+  slides `STICKER_GRID`→`PULL_DIST` with the LIVE `groupT`, so the areas track the grouping
+  animation). Each relocated area keeps its normal-mode identity — same sticker, same `g`, same
+  slab/axis/sign resolution (its `g` along the sheet's facing axis is the cell's sign: that's the
+  cubie it belongs to) — so a swipe there turns exactly the `turnFace`/`turnMiddle` hyper-slab the
+  equivalent cube-face swipe would, and the sheet travels with the finger. The old cube-face
+  locations are NOT controls in classic (the centre shows only the cell's own inner stickers), the
+  middle/outer-layer side stickers never are, and only camera-oriented sheets are emitted (per-quad
+  `normal·toCam` test) — so stickers seen from behind through classic's gaps never react. With side
+  cells hidden (side mode `none`) classic draws no side stickers, so there are no swipe areas at
+  all; mid-classic-tween the cube surface briefly remains.
 - **Middle slice** (`turnMiddle` → `executeMiddleMove`): rotate the whole **`fAxis=0`
   hyper-slab** — every cubie with `pos4[fAxis]=0` (27: the centred cube's middle layer + the
   adjacent cells' middle slices in that plane), in the slice plane. It's the slab *between*

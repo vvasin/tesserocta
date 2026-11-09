@@ -320,3 +320,124 @@ test('classic view: defaults, always-available tuning options, and a clean recen
   expect(bright).toBeGreaterThan(2000);
   expect(errors).toEqual([]);
 });
+
+test('classic view: the same \u226427 swipe areas relocate to the pulled-out side stickers', async ({ page }) => {
+  const errors = await gotoApp(page);
+
+  // Baseline (normal mode): \u226427 areas on the centred cube's visible faces.
+  const normal = await page.evaluate(() => {
+    const st = window.__app.centralStickers();
+    return { count: st.length, clusters: st.filter(s => s.cluster).length };
+  });
+  expect(normal.count).toBeGreaterThanOrEqual(24);
+  expect(normal.count).toBeLessThanOrEqual(27);
+  expect(normal.clusters).toBe(0);
+
+  // Settle classic instantly (grouping on \u2014 the default), then inspect the surface:
+  // the SAME \u226427 areas, now all on the side cells' pulled-out inner sheets \u2014 the old
+  // cube-face locations are no longer controls.
+  const classic = await page.evaluate(() => {
+    const a = window.__app;
+    a.setSideMode('solid');
+    a.setClassic(true);
+    a.classicT = 1; a._classicAnim = null;
+    a.groupT = 1; a._groupAnim = null;
+    a.markDirty();
+    const st = a.centralStickers();
+    return {
+      count: st.length,
+      onSheets: st.every(s => s.cluster && s.a === s.cluster.k && s.sa === s.cluster.s),
+      faces: [...new Set(st.map(s => s.cluster.k + ':' + s.cluster.s))].length,
+    };
+  });
+  expect(classic.count).toBeGreaterThanOrEqual(24);
+  expect(classic.count).toBeLessThanOrEqual(27);       // same \u226427 areas as normal mode
+  expect(classic.onSheets).toBe(true);                 // all relocated, all camera-facing
+  expect(classic.faces).toBe(3);                       // 3 visible cells \u00d7 9, like the 3 cube faces
+
+  // Semantic mapping via spies: a relocated area keeps its normal-mode meaning \u2014 drag
+  // along one tangent turns the slab named by the sticker's lattice coord about the
+  // OTHER tangent (0 \u2192 the middle slice), for both grouped and ungrouped layouts.
+  const map = await page.evaluate(() => {
+    const a = window.__app;
+    const calls = [];
+    const origFace = a.turnFace.bind(a), origMid = a.turnMiddle.bind(a);
+    a.turnFace = (k, s, d) => calls.push(['face', k, s, d]);
+    a.turnMiddle = (k, d) => calls.push(['mid', k, d]);
+    const drive = (s, ti) => {   // synthetic swipe from the sticker centre along +t[ti]
+      const c = s.poly;
+      const cx = (c[0].x + c[1].x + c[2].x + c[3].x) / 4, cy = (c[0].y + c[1].y + c[2].y + c[3].y) / 4;
+      const ex = ti === 0 ? (c[1].x + c[2].x - c[0].x - c[3].x) / 2 : (c[2].x + c[3].x - c[0].x - c[1].x) / 2;
+      const ey = ti === 0 ? (c[1].y + c[2].y - c[0].y - c[3].y) / 2 : (c[2].y + c[3].y - c[0].y - c[1].y) / 2;
+      calls.length = 0;
+      const ok = a.applyCentralSwipe(s, cx + 1.5 * ex, cy + 1.5 * ey);
+      return ok && calls.length === 1 ? calls[0] : null;
+    };
+    const probe = () => {
+      const s = window.__app.centralStickers()[0];
+      const out = [];
+      for (const ti of [0, 1]) {
+        const r = s.t[1 - ti], slab = s.g[r];
+        out.push({ got: drive(s, ti), want: slab === 0 ? ['mid', r] : ['face', r, slab] });
+      }
+      return out;
+    };
+    const grouped = probe();
+    a.groupT = 0; a._groupAnim = null; a.groupSides = false;   // ungrouped spread layout
+    const ungrouped = probe();
+    const ungroupedCount = a.centralStickers().length;
+    a.groupT = 1; a._groupAnim = null; a.groupSides = true;
+    a.turnFace = origFace; a.turnMiddle = origMid;
+    return { grouped, ungrouped, ungroupedCount };
+  });
+  expect(map.ungroupedCount).toBeGreaterThanOrEqual(24);
+  expect(map.ungroupedCount).toBeLessThanOrEqual(27);
+  for (const probe of [...map.grouped, ...map.ungrouped]) {
+    expect(probe.got).not.toBeNull();
+    expect(probe.got.slice(0, probe.want.length)).toEqual(probe.want);
+  }
+
+  // A real pointer drag across a relocated area turns the puzzle and never orbits.
+  const sw = await page.evaluate(() => {
+    const st = window.__app.centralStickers();
+    const area = p => Math.abs(p.reduce((s2, q, i) => {
+      const n = p[(i + 1) % 4]; return s2 + q.x * n.y - n.x * q.y;
+    }, 0)) / 2;
+    const tiles = [...document.querySelectorAll('.cell-tile')].map(el => el.getBoundingClientRect());
+    const onTile = (x, y) => tiles.some(r => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+    const mid = p => ({ x: (p[0].x + p[1].x + p[2].x + p[3].x) / 4, y: (p[0].y + p[1].y + p[2].y + p[3].y) / 4 });
+    const s = st.filter(x => !onTile(mid(x.poly).x, mid(x.poly).y))
+      .sort((p, q) => area(q.poly) - area(p.poly))[0];
+    const c = s.poly;
+    const cx = (c[0].x + c[1].x + c[2].x + c[3].x) / 4, cy = (c[0].y + c[1].y + c[2].y + c[3].y) / 4;
+    const ux = (c[1].x + c[2].x - c[0].x - c[3].x) / 2, uy = (c[1].y + c[2].y - c[0].y - c[3].y) / 2;
+    return { cx, cy, ex: cx + ux * 1.5, ey: cy + uy * 1.5, yaw: window.__app.viewYaw };
+  });
+  const before = await page.evaluate(() => JSON.stringify(window.__app.cubies.map(c => [...c.pos4])));
+  await page.mouse.move(sw.cx, sw.cy);
+  await page.mouse.down();
+  await page.mouse.move((sw.cx + sw.ex) / 2, (sw.cy + sw.ey) / 2);
+  await page.mouse.move(sw.ex, sw.ey);
+  await page.mouse.up();
+  await page.waitForTimeout(700);
+  const res = await page.evaluate(() => ({
+    cubies: JSON.stringify(window.__app.cubies.map(c => [...c.pos4])),
+    yaw: window.__app.viewYaw,
+  }));
+  expect(res.cubies).not.toBe(before);
+  expect(res.yaw).toBe(sw.yaw);
+
+  // Gates: with the side cells hidden classic draws no side stickers \u2192 no swipe areas;
+  // classic off \u2192 the centred cube's own surface again.
+  const gates = await page.evaluate(() => {
+    const a = window.__app;
+    a.setSideMode('none'); const hiddenSides = a.centralStickers().length; a.setSideMode('solid');
+    a.setClassic(false); a.classicT = 0; a._classicAnim = null;
+    const st = a.centralStickers();
+    return { hiddenSides, offClusters: st.filter(s => s.cluster).length, offCount: st.length };
+  });
+  expect(gates.hiddenSides).toBe(0);
+  expect(gates.offClusters).toBe(0);
+  expect(gates.offCount).toBeGreaterThanOrEqual(24);
+  expect(errors).toEqual([]);
+});
