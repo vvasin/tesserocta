@@ -103,3 +103,44 @@ html, body {
   min-height: 0;
   pointer-events: none;   /* drags fall through to the canvas; buttons re-enable below */
 }
+
+/* Twist-button groups framing the cube on the 4 stage edges. */
+.turn-group {
+  position: absolute;
+  pointer-events: auto;
+  display: grid;
+  gap: 5px 6px;
+  padding: 6px;
+  border-radius: 13px;
+  background: rgba(14, 14, 20, 0.42);
+  backdrop-filter: blur(6px);
+}
+.grid-3col { grid-template-columns: repeat(3, auto); }
+#turn-bottom { bottom: 8px; left: 50%; transform: translateX(-50%); }
+.turn-btn {
+  width: 40px;
+  height: 40px;
+  padding: 2px;
+  border-radius: 10px;
+  background: rgba(40, 40, 52, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.turn-btn svg { width: 100%; height: 100%; display: block; }
+.turn-btn:active:not(:disabled) { background: rgba(90, 215, 255, 0.25); }
+.turn-btn:disabled { opacity: 0.35; }
+
+/* ── Buttons (shared) ─────────────────────────────────────────────────── */
+button {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+button:active:not(:disabled) { background: #2a2a36; }
+button:disabled { opacity: 0.4; cursor: default; }

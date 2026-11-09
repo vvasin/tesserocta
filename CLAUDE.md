@@ -38,6 +38,7 @@ const a = window.__app;
 a.viewYaw = -0.6; a.viewPitch = 0.5; a.viewZoom = 1.4; a.viewRot = a._composeViewRot();
 a.anim.speedFactor = 0.1;           // slow animations down to capture mid-transition
 a.executeMove(2, 'XW', +1);         // cellIndex, planeName, sign (any cell/plane)
+a.turnScreenPlane(0, 2, +1);        // twist the CENTRED cell via a screen-plane button (iIdx,jIdx,dir)
 a.selectCentralCell(4);             // animated, stable recentering
 a.setCentralMode('wire');           // focused layer: 'solid' | 'wire'
 a.setSideMode('none');              // side cells: 'semi' | 'solid' | 'wire' | 'none'
@@ -67,6 +68,7 @@ every `errors == []` assertion in the specs.
 - `src/renderer.js` — WebGL: opaque, depth-tested, **no back-face culling**. `beginFrame()` clears the whole canvas; `drawView(cells, viewRot, segments, camDist, rect, zoom)` renders one scissored viewport (`zoom` crops/magnifies without moving the camera) — called once per view.
 - `src/animation.js` — `AnimationEngine`: move queue, easing, per-frame state. `MOVE_DURATION=360ms`, `speedFactor`.
 - `src/controls.js` — pointer + keyboard input and the DOM builders for the game shell (cell tiles, twist buttons).
+- `src/icons.js` — twist-button SVG icons, reconstructed in code from 4 hand-crafted base glyphs (full-cube / top / middle / bottom slab — a CCW rotation about the vertical axis) and derived by transform: opposite direction = mirror, other axis = rotate 120°/240° (the iso cube is 3-fold symmetric). Vertical axis = screen-Y. `turnIcon`/`TURN_BUTTONS` (cube rotation, `full`), `faceIcon` (outer `top`/`bottom` slab), `middleIcon` (middle slab). Arrow uses the accent colour; the cube uses `currentColor`.
 - `src/shaders.js` — GLSL. Two-sided lambert (`abs(dot(n,light))`), `u_ambient=0.42`; screen-door dither `discard` via an **ordered Bayer 8×8** threshold (uniform frosted stipple, not noise) — keeps each fragment with probability `a_opacity`, for the solid→wireframe dissolve and the translucent semitransparent side cells.
 - `scripts/serve.js` — zero-dep static dev server (sets ESM MIME types). `tests/` — Playwright specs. `playwright.config.js`, `eslint.config.js`, `package.json` — infra.
 
@@ -214,6 +216,23 @@ or absent).
   introduces roll. `viewZoom` sets the camera distance (`MAIN_CAM/zoom`) shared by all 9
   views; sub-views additionally crop-zoom in (`SUBVIEW_ZOOM`) to fill their tile (same
   perspective as the main view). View changes never touch puzzle state.
+- **Turning**: all moves act on the **centred** cube; to work on another cell, tap its
+  sub-view to centre it first. Buttons sit in **groups framing the cube**:
+  - **bottom** — whole-cube rotation (`turnScreenPlane`): rotate the centred cell, 3 screen
+    axes × 2 = 6.
+  Every button is a STATIC icon, but its **target follows the view**: the icons depict a cube
+  cornered edge-toward-you showing a front-left, front-right, and top face, and the buttons
+  resolve against `_buttonFrame()` — the canonical frame with its two **horizontal** axes
+  (`e0`,`e2`) rotated by the view's nearest yaw quarter-turn (relative to `DEFAULT_YAW`), so the
+  front-left / front-right slots always point at the faces actually in those positions. The
+  **top axis `e1` is deliberately left static** (so is `eF`). It's a proper 90°-quantised
+  rotation (det stays +1), so at the resting view it *is* the canonical frame (no change) and
+  every sign convention below still holds. (Only the buttons use `_buttonFrame`; swipes read
+  true on-screen geometry, so they're already view-correct and pass the canonical frame.)
+  `_screenPlaneMove` then maps the chosen screen-plane to the centred cell's concrete
+  `(planeName, sign)`; its permutation-parity factor makes `dir=+1` always a right-handed CCW
+  turn about the +screen axis (matching the icon arrow) — without it the Y plane (0,2), being
+  cyclically odd, comes out inverted.
 - **Keys** (desktop convenience): `1–8` centre cell · arrows rotate view · `V` reset view
   · `W` toggle Central cell solid↔wireframe · `U`/`Shift+U` undo/redo. Pointer drag orbits;
   tap a sub-view tile to centre it; wheel / two-finger pinch zoom.

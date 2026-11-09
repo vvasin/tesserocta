@@ -4,8 +4,9 @@ import { computeCells, computeWireframe, computeCoreWireframe,
          frameForCell, cloneFrame, slerpFrame, centralFromFrame } from './projection.js';
 import { Renderer } from './renderer.js';
 import { AnimationEngine } from './animation.js';
-import { Controls, buildCellTiles, setCenteredTile } from './controls.js';
+import { Controls, buildCellTiles, buildTurnControls, setCenteredTile } from './controls.js';
 
+const AXIS_LETTERS = ['X', 'Y', 'Z', 'W'];   // 4D axis index → plane-name letter
 const DEFAULT_YAW  = -Math.PI / 5.5;         // resting turntable yaw; also the reference the twist
                                              // buttons orient against (their icons read right here)
 const MAIN_CAM     = 15;                      // camera distance at zoom 1 (main view default)
@@ -58,6 +59,7 @@ class App {
     this.stageEl = document.getElementById('stage');
 
     buildCellTiles();
+    buildTurnControls(this);
     this.tileEls = [];
     document.querySelectorAll('.cell-tile').forEach(el => { this.tileEls[+el.dataset.cell] = el; });
     setCenteredTile(this.centralCellIndex);
@@ -216,6 +218,69 @@ class App {
     this.markDirty();
   }
 
+  // ── Turns (only the centred cell; mapped from a screen-plane button) ──────────
+
+  // The twist buttons name a move by SCREEN axes (e0→x, e1→y, e2→z). At rest those
+  // map to the centred cell's canonical frame, but the user can yaw the turntable —
+  // so a button's "front-left / front-right" face is no longer the canonical one. This
+  // returns the frame the buttons should resolve against: the canonical frame with its
+  // two HORIZONTAL axes (e0,e2) rotated by the view's nearest yaw quarter-turn (relative
+  // to DEFAULT_YAW), so e0 stays on whichever face currently sits in the front-left slot
+  // and e2 in the front-right slot. The vertical axis e1 (top) and depth eF are kept —
+  // top is deliberately static. It's a proper 90°-quantised rotation, so det stays +1 and
+  // every icon-arrow sign convention still holds; at the resting view (k=0) it's exactly
+  // the canonical frame. (Swipes don't use this — they read true on-screen geometry.)
+  _buttonFrame() {
+    const f = frameForCell(this.centralCellIndex);
+    let k = Math.round((DEFAULT_YAW - this.viewYaw) / (Math.PI / 2)) % 4;
+    if (k < 0) k += 4;
+    let e0 = f.e[0], e2 = f.e[2];
+    for (let i = 0; i < k; i++) { const t = e0; e0 = e2.map(v => -v); e2 = t; }   // (e0,e2) → (−e2, e0)
+    return { e: [e0, f.e[1], e2], eF: f.eF };
+  }
+
+  // A twist button names a screen-plane via two indices into the core frame basis
+  // (e0→x, e1→y, e2→z) and a direction. Resolve it to the centred cell's concrete
+  // (planeName, sign) using `frame` (the buttons pass `_buttonFrame()`; the swipe and
+  // anything else default to the canonical frame), so the on-screen spin matches the
+  // icon's arrow regardless of which cell is centred or how the view is turned.
+  turnScreenPlane(iIdx, jIdx, dir, frame = null) {
+    if (this.anim.isBusy()) return;
+    const f = frame || frameForCell(this.centralCellIndex);
+    const { planeName, sign } = this._screenPlaneMove(f, iIdx, jIdx, dir);
+    this.executeMove(this.centralCellIndex, planeName, sign);
+  }
+
+  // Rotate a FACE-LAYER of the central cube — i.e. turn the SIDE CELL on that face,
+  // the same move family the shuffle uses. `kScreen` is the face-normal screen axis
+  // (0/1/2 ↔ e0/e1/e2), `sSide` ±1 which of the two faces. The turn plane is the other
+  // two screen axes (so it avoids the depth axis — an ordinary cube face turn).
+  turnFace(kScreen, sSide, dir, frame = null) {
+    if (this.anim.isBusy()) return;
+    const f = frame || frameForCell(this.centralCellIndex);
+    const eN = f.e[kScreen];
+    const fAxis = nonzeroAxis(eN);
+    const ci = CELLS.findIndex(c => c.axis === fAxis && c.val === sSide * Math.sign(eN[fAxis]));
+    const [i, j] = [0, 1, 2].filter(k => k !== kScreen);
+    const { planeName, sign } = this._screenPlaneMove(f, i, j, dir);
+    this.executeMove(ci, planeName, sign);
+  }
+
+  // Map a screen-plane (the two screen axes iIdx,jIdx) under frame `f` to a concrete 4D
+  // (planeName, sign). `dir=+1` is a right-handed CCW turn about the THIRD screen axis
+  // e[k] (k = the missing index), so it matches the icon's arrow. `par` is the parity of
+  // (iIdx,jIdx,k): the (0,2) plane is cyclically odd, so without it the Y axis (yaw /
+  // top-bottom faces) would come out inverted relative to roll/pitch.
+  _screenPlaneMove(f, iIdx, jIdx, dir) {
+    const ei = f.e[iIdx], ej = f.e[jIdx];
+    const p = nonzeroAxis(ei), si = Math.sign(ei[p]);
+    const q = nonzeroAxis(ej), sj = Math.sign(ej[q]);
+    const a = Math.min(p, q), b = Math.max(p, q);
+    const k = 3 - iIdx - jIdx;
+    const par = Math.sign((jIdx - iIdx) * (k - iIdx) * (k - jIdx));
+    return { planeName: AXIS_LETTERS[a] + AXIS_LETTERS[b], sign: dir * (p < q ? 1 : -1) * si * sj * par };
+  }
+
   executeMove(cellIndex, planeName, sign) {
     if (this.anim.moveQueue.length >= 3) return;   // queue up to 3 ahead
     this.anim.queueMove(this.cubies, cellIndex, planeName, sign);
@@ -270,6 +335,12 @@ class App {
   cycleViewMode() {
     this.setCentralMode(this.centralMode === 'solid' ? 'wire' : 'solid');
   }
+}
+
+function nonzeroAxis(v) {
+  let k = 0, best = 0;
+  for (let i = 0; i < 4; i++) if (Math.abs(v[i]) > best) { best = Math.abs(v[i]); k = i; }
+  return k;
 }
 
 function easeInOut(t) { return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2; }

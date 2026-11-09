@@ -1,7 +1,9 @@
 // Input handling + DOM builders for the game shell.
 //   • One pointer handler on the canvas: a drag orbits all 9 views; a tap on a cell tile
 //     centres that cell; two fingers pinch-zoom.
+//   • Builds the 8 cell tiles and the 6 embedded twist buttons.
 import { CELLS } from './puzzle.js';
+import { TURN_BUTTONS, turnIcon, faceIcon, middleIcon } from './icons.js';
 
 const VIEW_STEP = Math.PI / 36;   // per arrow-key press
 const ZOOM_STEP = 1.0015;         // per wheel-delta unit
@@ -128,6 +130,25 @@ export function setCenteredTile(idx) {
   document.querySelectorAll('.cell-tile').forEach(el => {
     el.classList.toggle('centered', +el.dataset.cell === idx);
   });
+}
+
+function fillGroup(id, set, cls, buttons) {
+  const g = document.getElementById(id);
+  g.className = `turn-group ${cls}`;
+  g.dataset.set = set;
+  g.innerHTML = '';
+  for (const b of buttons) {
+    const el = document.createElement('button');
+    el.className = 'turn-btn';
+    el.innerHTML = b.html;
+    el.addEventListener('click', b.fn);
+    g.appendChild(el);
+  }
+}
+
+export function buildTurnControls(app) {
+  fillGroup('turn-bottom', 'central', 'grid-3col',
+    TURN_BUTTONS.map(b => ({ html: turnIcon(b.key, b.dir), fn: () => app.turnScreenPlane(b.iIdx, b.jIdx, b.dir, app._buttonFrame()) })));
 }
 
 function rgbToHex([r, g, b]) {
