@@ -13,12 +13,9 @@ cube), and tap a sub-view to bring a different cell to centre. All 9 views share
 turntable orientation.
 
 This file is the orientation for a future session. It records the **current** design and
-the non-obvious decisions behind it. Read the rationale before changing the
+the non-obvious decisions behind it (see also "Rejected approaches"). Read the rationale before changing the
 projection or coloring — most of it is the result of long iteration and looks arbitrary
 out of context.
-
-> **Status: under construction.** The paragraphs above describe the target design. The
-> sections below are added as each part lands, so what they document is what exists.
 
 ## Run & test
 
@@ -386,3 +383,49 @@ The classic flag restores settled (`classicT = classic ? 1 : 0`, never mid-tween
   quota, corruption are swallowed); `restoreCubies` validates shape and applies all-or-nothing,
   and every restored setting/index is range-checked, falling back to the solved/default value.
 
+## Invariants to preserve
+
+- Cubies are constant size and never deform; the central cell reads as a compact 3×3×3.
+- Coloring is **sticker-based, 8 cell colors** (not 24 face colors); non-sticker faces dark.
+- Visuals stay minimal: only cubies (+ optional wireframe). No axes/labels/grids in canvas.
+- Cell turn = cubie 4D rotation; centering = frame 4D rotation. Keep these separate.
+- All 9 views share **one** `viewRot`. Centering must commit a **canonical** frame
+  (`frameForCell`), so revisiting a cell is always identical (stable centering).
+
+## Rejected approaches (don't re-tread these)
+
+Each of these was built, found wanting, and replaced. If something in the current design
+seems redundant or odd, it almost certainly fixes a specific visual artifact (color snaps,
+edge bleed, grazing-angle holes, all-black turns) — don't "simplify" it away without
+reproducing the artifact first.
+
+- **One-core carving** — cubies as pieces of the single core tesseract. They inherit the
+  core's nonlinear depth distortion and come out crooked; replaced by independent per-cubie
+  Schlegel tesseracts (placement and shape are separate maps).
+- **Translucent fills** — true alpha on every cell box. 72 cubies × 8 nested cells have no
+  correct back-to-front order ("translucent hell"); replaced by opaque depth-nesting, with
+  see-through carried by wireframes and the screen-door dither.
+- **Per-axis lobes** — rendering each cell as lobes per axis read as 18 cells per cell.
+- **Whole-cubie blackout** — darkening a whole cubie mid-turn hid every snap but blacked
+  out the entire puzzle during recentering; replaced by the directional `colorWeight`.
+- **Per-face fade** — fading faces by their 4D normal's depth alignment blacked out the
+  very stickers that should stay lit (a side sticker's 4D normal lies along depth).
+- **Single-plane centering** — the free axes drifted on revisits and the 180° hop was not
+  smooth; replaced by canonical frames + the SO(4) geodesic.
+- **A separate sub-view cube builder** — duplicated the main view's look and made cubies
+  pop in/out during a neighbour's turn; replaced by reusing `computeCells` /
+  `computeWireframe` on the cell's own frame, so leaving cubies dither out.
+- **Hashed dither** — a per-pixel hash threshold reads as TV static at partial coverage;
+  replaced by the ordered Bayer 8×8 threshold (uniform frosted stipple).
+- **Looping scramble and a Demo auto-player** — a start/stop scramble loop and an
+  auto-playing demo suited a workbench, not a game; replaced by the one-shot Shuffle.
+- **Shuffle undoing its previous turn** — an unguarded random pick can play a turn and its
+  inverse back-to-back, leaving the state unchanged; the shuffle rejects that candidate.
+- **Disabling the classic options while classic is off** — forced a round-trip through the
+  toggle just to preconfigure them; they stay enabled always.
+- **Classic swipe areas as full cluster cubes / all-layer sheets** — multiplied the targets
+  (81–150 quads), covered the orbit space, and made controls of stickers that have no
+  normal-mode counterpart; replaced by relocating the same ≤27 areas to the inner sheets.
+
+For the reasoning in full — the collision model the color fade is built on and the longer
+story behind several of the entries above — see [docs/model-notes.md](docs/model-notes.md).

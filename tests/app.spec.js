@@ -1,6 +1,11 @@
 // End-to-end smoke/robustness tests. There are no unit tests — correctness here is
 // "the real app runs, renders, and survives every interaction without console errors."
+// Reference screenshots land in test-results/screenshots/ for manual inspection (we
+// avoid pixel-baseline snapshots: WebGL output differs across machines/GPUs).
 import { test, expect } from '@playwright/test';
+import { mkdir, writeFile } from 'node:fs/promises';
+
+const SHOTS = 'test-results/screenshots';
 
 // Load the app, capture any page/console errors, wait until it's interactive.
 async function gotoApp(page) {
@@ -440,4 +445,21 @@ test('classic view: the same \u226427 swipe areas relocate to the pulled-out sid
   expect(gates.offClusters).toBe(0);
   expect(gates.offCount).toBeGreaterThanOrEqual(24);
   expect(errors).toEqual([]);
+});
+
+test('captures reference screenshots', async ({ page }) => {
+  await gotoApp(page);
+  await mkdir(SHOTS, { recursive: true });
+  const canvas = page.locator('#glcanvas');
+  await writeFile(`${SHOTS}/idle.png`, await canvas.screenshot());
+  await page.evaluate(() => { window.__app.setCentralMode('wire'); window.__app.setCoreWire(true); });
+  await page.waitForTimeout(200);
+  await writeFile(`${SHOTS}/wireframe.png`, await canvas.screenshot());
+  await page.evaluate(() => {
+    const a = window.__app;
+    a.setCentralMode('solid'); a.setCoreWire(false); a.setSideMode('solid');
+    a.setClassic(true); a.classicT = 1; a._classicAnim = null; a.markDirty();
+  });
+  await page.waitForTimeout(200);
+  await writeFile(`${SHOTS}/classic.png`, await canvas.screenshot());
 });

@@ -29,7 +29,8 @@ npm run lint                       # ESLint
 ```
 
 Tests live in `tests/`; they drive the real app and assert it renders and survives every
-interaction without console errors.
+interaction without console errors. Reference screenshots are written to
+`test-results/screenshots/` (gitignored) for manual inspection.
 
 ## Layout
 
