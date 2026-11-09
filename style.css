@@ -1,0 +1,44 @@
+*, *::before, *::after {
+  box-sizing: border-box; margin: 0; padding: 0;
+  touch-action: manipulation;   /* no double-tap-to-zoom on iOS (canvas overrides to none) */
+}
+
+:root {
+  --bg: #07070b;
+  --surface: #16161c;
+  --surface-2: #1f1f28;
+  --border: #2c2c38;
+  --text: #e6e6ee;
+  --text-dim: #9a9aac;
+  --accent: #5ad7ff;
+  --danger: #ff5a6e;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Phone-shaped play area, centered. Width tracks the height (capped to a square) so on
+   wide screens the main view grows to use the vertical space instead of sitting in a thin
+   column; on portrait phones this is just the full width. */
+#app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: min(100vw, 100dvh);
+  margin: 0 auto;
+  background: var(--bg);
+  /* keep clear of notches / home indicators */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+}

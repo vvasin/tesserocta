@@ -1,0 +1,22 @@
+{
+  "name": "tesserocta",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "A 4D puzzle in eight views.",
+  "scripts": {
+    "start": "node scripts/serve.js",
+    "serve": "node scripts/serve.js",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "lint": "eslint .",
+    "setup": "npm install && playwright install chromium"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@playwright/test": "^1.48.0",
+    "eslint": "^9.13.0",
+    "globals": "^15.11.0"
+  }
+}
