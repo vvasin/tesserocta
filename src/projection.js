@@ -35,9 +35,32 @@ function smoothstep(lo, hi, x) {
   return t * t * (3 - 2 * t);
 }
 
+// How much sticker colour a cell shows (solid mode), as a function of its current
+// depth facing `df` and its committed (end-of-turn) depth facing `dft`. Comparing the
+// two tells us which way the cell is heading, so we can time colour to the collisions
+// instead of blacking the whole cubie:
+//
+//   • side cell, not transitioning (|dft| ≈ |df|): always painted (the S1–S4 group).
+//   • HIDING (|dft| > |df|, becoming inner/outer): stay painted, fade out late — it's
+//     still side-like through the early part of its slide into depth.
+//   • REVEALING (|dft| < |df|, becoming a side cell): stay BLACK until it has emerged,
+//     then paint. The outer-side reveal (df<0, the old outer cell breaking through the
+//     stationary sides too) paints latest of all.
+//
+// Net effect: hiders and revealers are never both lit during a crossover, yet the
+// stationary sides stay coloured — so the puzzle is never all-black, snaps and all.
 const SIDE_FADE_HI = 0.5;              // |df| at/above which a settled cell is black
 function sideColorWeight(df) {
   return 1 - smoothstep(0, SIDE_FADE_HI, Math.abs(df));
+}
+function colorWeight(df, dft) {
+  const a = Math.abs(df), at = Math.abs(dft);
+  if (at > a + 1e-4) return 1 - smoothstep(0.55, 0.92, a);          // hiding: paint, fade out late
+  if (at < a - 1e-4) {                                             // revealing: black, paint late
+    const lo = df < 0 ? 0.12 : 0.30, hi = df < 0 ? 0.42 : 0.60;    // outer-side reveal paints latest
+    return 1 - smoothstep(lo, hi, a);
+  }
+  return sideColorWeight(df);                                       // settled / stationary side
 }
 
 // Centre radius vs depth (cubies keep constant size, so deeper shells just
@@ -112,6 +135,7 @@ function cubieBoxes(cubie, center, orient, frame, targetOrient = orient, classic
     const ln = [0,0,0,0]; ln[a] = s;
     const lnw = mat4MulVec4(orient, ln);                        // this cell's outward dir (world)
     const df  = dot4(lnw, frame.eF);                           // current depth facing
+    const dft = dot4(mat4MulVec4(targetOrient, ln), frame.eF);  // committed (end-of-turn) depth facing
     const perp = [0,1,2,3].filter(x => x !== a);
     const C8 = new Array(8);
     let cx = 0, cy = 0, cz = 0;
@@ -129,17 +153,20 @@ function cubieBoxes(cubie, center, orient, frame, targetOrient = orient, classic
     let ctr = [cx/8, cy/8, cz/8];
     for (let b = 0; b < 8; b++)                            // inset toward cell centre
       C8[b] = [ctr[0]+(C8[b][0]-ctr[0])*CUBIE_SHRINK, ctr[1]+(C8[b][1]-ctr[1])*CUBIE_SHRINK, ctr[2]+(C8[b][2]-ctr[2])*CUBIE_SHRINK];
-    boxes.push({ color: colorOf[a*2 + (s > 0 ? 0 : 1)] || null, C8, ctr, df });
+    boxes.push({ color: colorOf[a*2 + (s > 0 ? 0 : 1)] || null, C8, ctr, df, dft });
   }
   return { cubieC, boxes };
 }
 
+// Emit the (camera-facing) quad faces of a cubie's 8 cell boxes into `faces`, at the
+// given opacity. Colour each box by its sticker via colorWeight (DARK when unused/
+// hidden). Normals point outward from each cell's own centroid so cells self-cull.
 function pushBoxFaces(faces, boxes, opacity, classic = null) {
   for (const bx of boxes) {
     const C8 = bx.C8, ctr = bx.ctr;
     const op = opacity;
     if (op <= 0.004) continue;
-    const w = bx.color ? sideColorWeight(bx.df) : 0;
+    const w = bx.color ? colorWeight(bx.df, bx.dft) : 0;
     const color = w <= 0 ? DARK
       : w >= 1 ? bx.color
       : [DARK[0]+(bx.color[0]-DARK[0])*w, DARK[1]+(bx.color[1]-DARK[1])*w, DARK[2]+(bx.color[2]-DARK[2])*w];
@@ -164,6 +191,8 @@ export function computeCells(cubies, frame, getState = null, { sideAlpha = 0, ce
     const st = getState ? getState(i) : null;
     const center4 = st ? st.center4 : cubie.pos4;
     const opacity = 1;
+    // Pass the committed orientation as the target so each cell knows whether it's
+    // heading toward the side role (revealing) or toward inner/outer (hiding).
     const { boxes } = cubieBoxes(
       cubie, center4, st ? st.orient : cubie.orient, frame, cubie.orient, classic);
     pushBoxFaces(faces, boxes, opacity, classic);

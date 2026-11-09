@@ -1,7 +1,8 @@
 import { mat3Mul, mat3AxisRotation } from './math4d.js';
-import { buildSolvedPuzzle } from './puzzle.js';
+import { buildSolvedPuzzle, undoMove } from './puzzle.js';
 import { computeCells, frameForCell } from './projection.js';
 import { Renderer } from './renderer.js';
+import { AnimationEngine } from './animation.js';
 
 const DEFAULT_YAW  = -Math.PI / 5.5;         // resting turntable yaw; also the reference the twist
                                              // buttons orient against (their icons read right here)
@@ -18,6 +19,12 @@ class App {
     this.viewPitch =  Math.PI / 7;
     this.viewZoom  = 1.0;
     this.viewRot = this._composeViewRot();
+
+    this.undoStack = [];
+    this.redoStack = [];
+
+    this.anim = new AnimationEngine();
+    this.anim.onMoveComplete = (desc) => this._onMoveComplete(desc);
 
     this.dirty = true;                         // redraw flag (render only when needed)
 
@@ -36,7 +43,9 @@ class App {
   // ── Render loop ──────────────────────────────────────────────────────────────
 
   _loop(timestamp) {
-    const frame = null, busy = false;          // nothing animates yet
+    const frame = this.anim.tick(timestamp, this.cubies, this.centralCellIndex);
+
+    const busy = !this.anim.isIdle();
     if (this.dirty || busy) {
       this._render(frame);
       this.dirty = false;
@@ -46,8 +55,9 @@ class App {
 
   _render(frame) {
     let coreFrame = this.coreFrame;
+    const getState = frame && frame.type === 'move' ? frame.getState : null;
 
-    const cells = computeCells(this.cubies, coreFrame);
+    const cells = computeCells(this.cubies, coreFrame, getState);
 
     const r = this.renderer;
     const canvasRect = this.canvas.getBoundingClientRect();
@@ -73,6 +83,36 @@ class App {
 
   _composeViewRot() {
     return mat3Mul(mat3AxisRotation(0, this.viewPitch), mat3AxisRotation(1, this.viewYaw));
+  }
+
+  executeMove(cellIndex, planeName, sign) {
+    if (this.anim.moveQueue.length >= 3) return;   // queue up to 3 ahead
+    this.anim.queueMove(this.cubies, cellIndex, planeName, sign);
+    this.redoStack = [];
+    this.markDirty();
+  }
+
+  _onMoveComplete(descriptor) {
+    if (descriptor) {
+      this.undoStack.push(descriptor);
+      if (this.undoStack.length > 100) this.undoStack.shift();
+    }
+    this.markDirty();
+  }
+
+  undo() {
+    if (this.anim.isBusy() || this.undoStack.length === 0) return;
+    const desc = this.undoStack.pop();
+    undoMove(this.cubies, desc);
+    this.redoStack.push(desc);
+    this.markDirty();
+  }
+
+  redo() {
+    if (this.anim.isBusy() || this.redoStack.length === 0) return;
+    const desc = this.redoStack.pop();
+    this.anim.queueMove(this.cubies, desc.cellIndex, desc.planeName, desc.sign);
+    this.markDirty();
   }
 }
 

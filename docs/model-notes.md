@@ -47,3 +47,117 @@ center projects to the cubie center, its corners to the far hull); the `CUBIE_SH
 inset toward each cell's centroid therefore pulls the outer cell's faces *inward* far
 more than the side faces move, so it self-hides behind the side stickers with no
 z-fighting.
+
+---
+
+## 3. The coloring problem: snaps, and the collision model
+
+Only side cells should show color; inner/outer must read dark. A depth-involving turn
+rotates cells *through* the depth axis, so solid faces swap depth order and colors
+snap. To time the color fade correctly we mapped out exactly what collides and when.
+
+**Setup.** A depth turn is a rotation by θ:0→90° in the plane `(eF, e0)` — the depth
+axis and one screen axis. Write `R(eF)=cosθ·eF + sinθ·e0`. Of the cubie's 8 cells, the
+4 whose axis lies in that plane swap roles (the **actors**); the other 4 (`±e1, ±e2`)
+keep their role but rotate internally (the **stationary sides**).
+
+| actor | role 0°→90° | `df(θ)` = axis·eF | persp (size) | nature |
+|---|---|---|---|---|
+| **A1** | inner → side | `cosθ`  : 1→0  | 0.58→1.0 grows | **reveal** |
+| **A2** | outer → side | `−cosθ` : −1→0 | 1.42→1.0 shrinks | **reveal** |
+| **A3** | side → outer | `−sinθ` : 0→−1 | 1.0→1.42 grows | **hide** |
+| **A4** | side → inner | `sinθ`  : 0→1  | 1.0→0.58 shrinks | **hide** |
+| **S1–S4** | side → side | `0` throughout | 1.0 | stationary |
+
+Who is dark when (✗ dark / ■ lit), under the current fade:
+
+```
+θ:            0°   15°  30°  45°  60°  75°  90°
+A1 inner→side ✗    ✗    ✗    ✗    ✗    ■    ■    reveals at the end
+A2 outer→side ✗    ✗    ✗    ✗    ✗    ■    ■    reveals at the end (latest)
+A3 side→outer ■    ■    ✗    ✗    ✗    ✗    ✗    hides from ~30° on
+A4 side→inner ■    ■    ✗    ✗    ✗    ✗    ✗    hides from ~30° on
+S1–S4 sides   ■    ■    ■    ■    ■    ■    ■    always lit
+```
+
+**The key result.** Pair up every collision and check whether both parties are already
+dark on their own:
+
+- A1 reveal ↔ A3 hide, A2 reveal ↔ A4 hide, A4 hide ↔ A3 hide — **all self-hide**: the
+  revealers are dark early-to-mid, the hiders dark mid-to-late, overlapping in the
+  middle where the swap happens.
+- A3 (becoming outer) and A2 (becoming side) crossing the **stationary sides** — these
+  do **not** self-hide, because the stationary sides stay lit.
+
+So the *only* collisions that snap are actor-vs-stationary-side. That single fact
+drives the whole design (§4) and bounds what's improvable (§6).
+
+---
+
+## 4. The current solution: `colorWeight(df, dft)`
+
+We time each cell's color to **which way it is heading**, read by comparing its current
+depth facing `df` to its committed (end-of-turn) depth facing `dft`:
+
+- **stationary side** (`|dft|≈|df|`) → always painted.
+- **hiding** (`|dft|>|df|`) → stay painted, fade out *late* (`1−smoothstep(0.55,0.92,|df|)`).
+  It's still side-like through the early part of its slide into depth.
+- **revealing** (`|dft|<|df|`) → stay **black** until it has emerged, then paint
+  (`1−smoothstep(lo,hi,|df|)`). The outer-side reveal (`df<0`, A2 — it has to clear the
+  stationary sides too) uses a lower threshold so it paints **latest** of all.
+
+`dft` comes for free during a turn: the logical move is committed at animation *start*,
+so `cubie.orient` already holds the end state while `getState()` supplies the animated
+one. Centering has no per-cubie target during a frame sweep, so it falls back to the
+symmetric settled fade (`sideColorWeight`).
+
+**Why this and not the simpler options:** see §5. The net is what §3 demands — the
+self-hiding collisions are covered by the directional timing, and the cube is **never
+all-black**: at any instant only the specific hiding/revealing faces are dark, the
+stationary sides keep their color. The accepted cost is in §7.
+
+---
+
+## 5. Dead ends worth recording
+
+**Whole-cubie blackout** (`transitionWeight(align)`). We darkened the *entire* cubie
+while it was mid-turn (no axis aligned to `eF`), so every crossover was black-to-black.
+It worked and hid *all* snaps — but it darkened too much, and was catastrophic for
+**recentering**, where every cubie transitions at once → the whole puzzle blacks out
+together. Replaced by the directional `colorWeight`, which only darkens the actual
+hiding/revealing faces. *Lesson: scope the darkening to the faces that snap, not the
+cubie.*
+
+**Per-face `pdf` fade** — fade a face by how much its own normal aligns with `eF`.
+Sounds right (depth-facing faces are where things break through), and it's tempting
+because it would avoid darkening whole cells. It **failed for a counterintuitive
+reason**: a side cell's *visible sticker* is the frustum's **outer-end** face, whose 4D
+normal points *along* the depth axis (`pdf≈1`) even though it renders as a flat outward
+square. So "fade faces that align with depth" blacked out exactly the stickers we
+wanted lit. *Lesson: a face's 4D normal direction is not its 3D screen orientation.*
+
+**Earlier attempts:** cubies-as-pieces-of-one-core (crooked, §2);
+transparency for depth (unreadable "translucent hell"); per-axis "lobe" rendering
+(read as 18 cells per cell). All abandoned for opaque depth-nesting + the color fade.
+
+---
+
+## 6. Counterintuitive geometric facts (each cost real time)
+
+- **A side cell's sticker face has `pdf≈1`.** It's the frustum's outer-end face; its 4D
+  normal lies along `eF`. Its flat outward screen appearance is unrelated to its 4D
+  normal. (This is what sank the per-face fade.)
+- **The outer cell is inside-out.** Center → projection origin, corners → far hull. So
+  shrinking it *toward* its centroid moves its visible boundary *outward*. Used as a
+  feature (cubie outer cell self-hides).
+
+---
+
+## 7. Accepted trade-offs (deliberate, not bugs)
+
+- **Stationary-side collisions still snap.** Given §3, hiding them would require
+  darkening the lit stationary sides — i.e. back toward the whole-cubie blackout. We
+  chose snaps over an all-black puzzle.
+- **No back-face culling.** The depth buffer handles occlusion; culling deleted faces
+  as they went edge-on, leaving see-through holes between a cubie's separate cell
+  boxes. Safe to drop now that inner/outer cells are dark + shrunk behind the stickers.

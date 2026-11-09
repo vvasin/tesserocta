@@ -36,8 +36,13 @@ tests; correctness is verified by driving the real app (Playwright). The app exp
 ```js
 const a = window.__app;
 a.viewYaw = -0.6; a.viewPitch = 0.5; a.viewZoom = 1.4; a.viewRot = a._composeViewRot();
+a.anim.speedFactor = 0.1;           // slow animations down to capture mid-transition
+a.executeMove(2, 'XW', +1);         // cellIndex, planeName, sign (any cell/plane)
 a.coreFrame;                        // current 4D frame {e:[e0,e1,e2], eF} — at rest, a canonical frame
 ```
+To capture a specific moment in a turn, poll `a.anim.active` and compute progress from
+`(performance.now() - active.startTime) / (active.duration / a.anim.speedFactor)`. The
+canvas uses `preserveDrawingBuffer`, so it can be read back via a 2D canvas in tests.
 
 **Remote/cloud sessions** (Claude Code web containers): Chromium is pre-installed under
 `/opt/pw-browsers` and `npx playwright install` is unavailable; if its revision doesn't
@@ -56,6 +61,7 @@ every `errors == []` assertion in the specs.
 - `src/puzzle.js` — cubie model, `CELLS` (the 8 cells + colors), `executeMove`/`undoMove`.
 - `src/projection.js` — **the heart**: 4D→3D projection, cubie geometry, color fade, canonical frames. Almost all design decisions live here.
 - `src/renderer.js` — WebGL: opaque, depth-tested, **no back-face culling**. `beginFrame()` clears the whole canvas; `drawView(cells, viewRot, segments, camDist, rect, zoom)` renders one scissored viewport (`zoom` crops/magnifies without moving the camera) — called once per view.
+- `src/animation.js` — `AnimationEngine`: move queue, easing, per-frame state. `MOVE_DURATION=360ms`, `speedFactor`.
 - `src/shaders.js` — GLSL. Two-sided lambert (`abs(dot(n,light))`), `u_ambient=0.42`; screen-door dither `discard` via an **ordered Bayer 8×8** threshold (uniform frosted stipple, not noise) — keeps each fragment with probability `a_opacity`, for the solid→wireframe dissolve and the translucent semitransparent side cells.
 - `scripts/serve.js` — zero-dep static dev server (sets ESM MIME types). `tests/` — Playwright specs. `playwright.config.js`, `eslint.config.js`, `package.json` — infra.
 
@@ -99,6 +105,23 @@ cell's outer face lands ~0.58 (the cube-face size). Each cell is inset toward it
 by `CUBIE_SHRINK=0.9` — and because the **outer cell is inside-out** (centroid at the
 cubie center, far from its faces) the same inset pulls it well behind the side stickers, so
 it self-hides without z-fighting.
+
+### Coloring & the snap-hiding fade (the subtle part)
+
+Only side cells should show sticker color; the inner/outer cells must read dark. But a
+depth-involving turn rotates cells through the depth axis, and solid faces swapping depth
+order make colors "snap." The fix is to **time color to the cell's depth facing** so every
+swap hands off black-to-black, *without* ever blacking the whole puzzle:
+
+- `df = (orient·cellAxis)·eF` — current depth facing (±1 inner/outer, 0 side).
+- `dft` — the same at the **committed** (end-of-turn) orientation. Comparing `|dft|` to
+  `|df|` tells which way the cell is heading.
+- `colorWeight(df, dft)`: **settled/stationary side** (|dft|≈|df|) → painted; **hiding**
+  (|dft|>|df|) → stay painted, fade out late; **revealing** (|dft|<|df|) → stay black,
+  paint late (outer-side reveal, `df<0`, paints latest). Color lerps DARK↔sticker by this.
+- Net: stationary sides stay lit, only the transitioning faces go dark through their
+  crossover. The trade (accepted): the moving cell vs *stationary side* collisions still
+  snap, but the puzzle is never all-black. Centering uses the symmetric settled fade.
 
 ### Other rendering facts
 
