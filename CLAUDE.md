@@ -39,6 +39,9 @@ a.viewYaw = -0.6; a.viewPitch = 0.5; a.viewZoom = 1.4; a.viewRot = a._composeVie
 a.anim.speedFactor = 0.1;           // slow animations down to capture mid-transition
 a.executeMove(2, 'XW', +1);         // cellIndex, planeName, sign (any cell/plane)
 a.turnScreenPlane(0, 2, +1);        // twist the CENTRED cell via a screen-plane button (iIdx,jIdx,dir)
+a.centralStickers();                // the ≤27 swipe hit-areas (client-px quads): the centred cube's
+                                    // visible stickers
+a.applyCentralSwipe(start, x, y);   // turn the layer a swipe from sticker `start` exits toward (x,y)
 a.selectCentralCell(4);             // animated, stable recentering
 a.setCentralMode('wire');           // focused layer: 'solid' | 'wire'
 a.setSideMode('none');              // side cells: 'semi' | 'solid' | 'wire' | 'none'
@@ -48,6 +51,8 @@ a.coreFrame;                        // current 4D frame {e:[e0,e1,e2], eF} — a
 To capture a specific moment in a turn, poll `a.anim.active` and compute progress from
 `(performance.now() - active.startTime) / (active.duration / a.anim.speedFactor)`. The
 canvas uses `preserveDrawingBuffer`, so it can be read back via a 2D canvas in tests.
+To eyeball the swipe surfaces, draw the `a.centralStickers()` polys (client px) onto a
+`position:fixed` overlay canvas and screenshot — they should sit on the visible stickers.
 
 **Remote/cloud sessions** (Claude Code web containers): Chromium is pre-installed under
 `/opt/pw-browsers` and `npx playwright install` is unavailable; if its revision doesn't
@@ -67,7 +72,7 @@ every `errors == []` assertion in the specs.
 - `src/projection.js` — **the heart**: 4D→3D projection, cubie geometry, color fade, wireframes (solid `computeCells` / wireframe `computeWireframe`, both keyed off the focused-layer weight `solidWeight` so they double as sub-views on a cell's own frame), canonical frames + `slerpFrame`, and the core-tesseract wireframe (`computeCoreWireframe`). Almost all design decisions live here.
 - `src/renderer.js` — WebGL: opaque, depth-tested, **no back-face culling**. `beginFrame()` clears the whole canvas; `drawView(cells, viewRot, segments, camDist, rect, zoom)` renders one scissored viewport (`zoom` crops/magnifies without moving the camera) — called once per view.
 - `src/animation.js` — `AnimationEngine`: move / middle-slice / centering queue, easing, per-frame state (per-cubie net sign for slices). `MOVE_DURATION=360ms`, `TRANSITION_DURATION=620ms`, `speedFactor`.
-- `src/controls.js` — pointer + keyboard input and the DOM builders for the game shell (cell tiles, twist buttons).
+- `src/controls.js` — unified pointer input: a drag that starts on a centred-cube sticker is a **layer swipe** (resolved via `App.centralStickers`/`applyCentralSwipe`) and never orbits; a drag that starts on the background or a cell tile orbits all views; tap a tile to centre that cell; pinch zoom. Plus keyboard; builds the cell tiles (`buildCellTiles`) and the 4 twist-button groups around the cube (`buildTurnControls`), shown/hidden by `setControlSet`.
 - `src/icons.js` — twist-button SVG icons, reconstructed in code from 4 hand-crafted base glyphs (full-cube / top / middle / bottom slab — a CCW rotation about the vertical axis) and derived by transform: opposite direction = mirror, other axis = rotate 120°/240° (the iso cube is 3-fold symmetric). Vertical axis = screen-Y. `turnIcon`/`TURN_BUTTONS` (cube rotation, `full`), `faceIcon` (outer `top`/`bottom` slab), `middleIcon` (middle slab). Arrow uses the accent colour; the cube uses `currentColor`.
 - `src/shaders.js` — GLSL. Two-sided lambert (`abs(dot(n,light))`), `u_ambient=0.42`; screen-door dither `discard` via an **ordered Bayer 8×8** threshold (uniform frosted stipple, not noise) — keeps each fragment with probability `a_opacity`, for the solid→wireframe dissolve and the translucent semitransparent side cells.
 - `scripts/serve.js` — zero-dep static dev server (sets ESM MIME types). `tests/` — Playwright specs. `playwright.config.js`, `eslint.config.js`, `package.json` — infra.
@@ -238,6 +243,25 @@ or absent).
   `(planeName, sign)`; its permutation-parity factor makes `dir=+1` always a right-handed CCW
   turn about the +screen axis (matching the icon arrow) — without it the Y plane (0,2), being
   cyclically odd, comes out inverted.
+- **Swipe to turn** (`App.centralStickers` / `applyCentralSwipe`, driven by `controls.js`): the
+  same layer turns are also reachable by **dragging across the centred cube** directly. Because
+  a central-cell cubie always projects to a clean grid (`pos4·eF = 1` → `depthR(1)=1.35`
+  constant), the 3×3×3 is modelled as an idealized cube and its ≤27 visible stickers are
+  projected to client pixels through the renderer's *exact* camera (frame, yaw/pitch, zoom).
+  Back-facing and below-threshold (`MIN_STICKER_FRAC`, edge-on) stickers are dropped, leaving the
+  clearly-targetable ones. **The turn is fixed by which EDGE of the start sticker the swipe exits
+  through** — `applyCentralSwipe` expresses the displacement from the sticker centre in that
+  sticker's in-face tangent basis (read perspective-correctly off its projected quad); the
+  dominant tangent is the drag axis, the *other* tangent is the rotation axis, the start's **logical
+  lattice coord** `g` along it is the slab (0 → `turnMiddle`, ±1 → `turnFace`), and the sign makes the
+  grabbed sticker travel the way the finger went (the drift test is `r̂ × c3` — the sticker's true
+  projected position, not its face normal, so it also holds for surfaces that sit off the rotation
+  axes) — reusing the exact same move/sign machinery as the buttons.
+  Keying off the exit edge (not a second sticker) is deliberate: it cleanly handles a swipe that
+  **wraps over a cube edge onto another face of the same cubie** (the literal corner case) and one
+  that **runs off into empty space**. **Press-time decides the gesture:** a drag begun on a sticker
+  only ever turns — it never orbits, and if it never leaves the start sticker it's simply ignored;
+  a drag begun on the background/tiles orbits as before.
 - **Middle slice** (`turnMiddle` → `executeMiddleMove`): rotate the whole **`fAxis=0`
   hyper-slab** — every cubie with `pos4[fAxis]=0` (27: the centred cube's middle layer + the
   adjacent cells' middle slices in that plane), in the slice plane. It's the slab *between*

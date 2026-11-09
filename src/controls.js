@@ -1,6 +1,9 @@
 // Input handling + DOM builders for the game shell.
-//   • One pointer handler on the canvas: a drag orbits all 9 views; a tap on a cell tile
-//     centres that cell; two fingers pinch-zoom.
+//   • One pointer handler on the canvas decides at press-time what a drag is: starting on
+//     a sticker of the centred cube is a LAYER SWIPE (the edge it exits through picks the
+//     layer + direction — see App.centralStickers / applyCentralSwipe), and once begun it
+//     never orbits; starting on the background or a cell tile orbits all 9 views; a tap on
+//     a tile centres that cell; two fingers pinch-zoom.
 //   • Builds the 8 cell tiles and the 6 embedded twist buttons.
 import { CELLS } from './puzzle.js';
 import { TURN_BUTTONS, turnIcon, faceIcon, middleIcon } from './icons.js';
@@ -52,6 +55,19 @@ export class Controls {
       return;
     }
     const cell = this._tileAt(e.clientX, e.clientY);
+    // Decide what this drag IS at press-time. On a cell tile (tap-to-centre) or empty
+    // background → 'orbit' (the existing turntable drag). On a sticker of the centred
+    // cube → 'cube' (a layer swipe): we freeze the
+    // sticker geometry and will NEVER orbit, even if the finger wanders off the cube — per
+    // the spec, a swipe that starts on the cube but reaches no neighbour is simply ignored.
+    if (cell < 0) {
+      const start = this._pickSticker(this.app.centralStickers(), e.clientX, e.clientY);
+      if (start) {
+        this.down = { x: e.clientX, y: e.clientY, mode: 'cube', start, done: false };
+        e.preventDefault();
+        return;
+      }
+    }
     this.down = { x: e.clientX, y: e.clientY, moved: false, mode: 'orbit', cell };
     e.preventDefault();
   }
@@ -70,6 +86,17 @@ export class Controls {
     }
     if (!this.down) return;
 
+    if (this.down.mode === 'cube') {
+      // Commit the moment the finger leaves the start sticker: the exit direction (which
+      // edge it crossed) selects the layer and turn. Wandering onto another face or off the
+      // cube entirely is fine — it's still a clean exit through one of the start's edges.
+      if (!this.down.done && !pointInPoly(e.clientX, e.clientY, this.down.start.poly)) {
+        if (this.app.applyCentralSwipe(this.down.start, e.clientX, e.clientY)) this.down.done = true;
+      }
+      e.preventDefault();
+      return;                              // a cube swipe never orbits the view
+    }
+
     const dx = e.clientX - px, dy = e.clientY - py;
     if (Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > TAP_SLOP) this.down.moved = true;
     this.app.orbit(dx * 0.008, dy * 0.008);
@@ -82,6 +109,16 @@ export class Controls {
     const d = this.down;
     this.down = null;
     if (d && d.mode === 'orbit' && !d.moved && d.cell >= 0) this.app.selectCentralCell(d.cell);
+  }
+
+  // The frozen sticker under a client point: the nearest (front-most) whose polygon
+  // contains it, or null. Front-most so a silhouette overlap resolves to the visible face.
+  _pickSticker(stickers, x, y) {
+    let best = null;
+    for (const s of stickers) {
+      if (pointInPoly(x, y, s.poly) && (!best || s.zc < best.zc)) best = s;
+    }
+    return best;
   }
 
   _pinchDist() {
@@ -180,6 +217,16 @@ export function setControlSet(set) {
   document.querySelectorAll('.turn-group').forEach(g => {
     g.classList.toggle('hidden', !(set === 'both' || g.dataset.set === set));
   });
+}
+
+// Ray-cast point-in-polygon over a quad of {x, y} client-pixel corners.
+function pointInPoly(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
 }
 
 function rgbToHex([r, g, b]) {
