@@ -263,6 +263,13 @@ export function computeCells(cubies, frame, getState = null, { sideAlpha = 0, ce
   return faces;
 }
 
+// Sub-views are not a separate projection: a cell shown with `frame = frameForCell(i)`
+// puts the cell's own axis on depth, so only its cubies have a high focused-layer weight
+// (`solidWeight ≈ 1`) — its side stickers become the 6 cube faces and the along-axis
+// mini-cells read dark. So a sub-view is just `computeCells` (solid) or `computeWireframe`
+// (wire) on the sub-frame; cubies sliding out during a neighbour's turn fade via the same
+// `sw`-keyed dither as the main view, instead of popping.
+
 // ── Wireframes (debug / perception) ───────────────────────────────────────────
 
 // Push the 12 edges of an 8-corner box, shrunk toward its centre, as segments at the
@@ -282,6 +289,7 @@ function pushBoxEdges(out, C8, color, shrink, opacity = 1) {
 //   • skipSolid — drop cubies the solid centre fully covers (sw ≥ 0.98), so the side-cell
 //     wireframe only shows where there is no solid on top of it (central solid + side wire).
 //   • fade — opacity = sw, so a wireframe cubie dithers OUT as it slides to the side role
+//     (a central-wireframe whose side appearance is "none", and every sub-view).
 // Without either flag every cubie is drawn opaque — a flat all-wireframe inspection.
 export function computeWireframe(cubies, frame, getState = null, { skipSolid = false, fade = false, classic = null } = {}) {
   const segs = [];

@@ -43,6 +43,7 @@ html, body {
            env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
+/* The shared GL canvas sits behind the layout; renders all 9 views. */
 #glcanvas {
   position: absolute;
   inset: 0;
@@ -51,6 +52,47 @@ html, body {
   display: block;
   z-index: 0;
   touch-action: none;
+}
+
+/* ── Cell sub-view strips ─────────────────────────────────────────────── */
+.cell-strip {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  align-self: center;          /* cap + centre the tiles so they don't balloon on wide screens */
+  width: min(100%, 560px);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  align-items: start;     /* let tiles take their square (aspect-ratio) height, not stretch */
+  gap: 6px;
+  padding: 6px;
+  pointer-events: none;   /* taps fall through to the canvas, which hit-tests tiles */
+}
+
+.cell-tile {
+  position: relative;
+  aspect-ratio: 1 / 1;    /* fixed squares */
+  border: 2px solid var(--cell, var(--border));
+  border-radius: 9px;
+  opacity: 0.62;
+  transition: opacity 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+.cell-tile .tile-name {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+}
+.cell-tile.centered {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--cell), 0 0 14px -2px var(--cell);
 }
 
 /* ── Main stage ───────────────────────────────────────────────────────── */

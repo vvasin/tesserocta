@@ -63,9 +63,10 @@ every `errors == []` assertion in the specs.
 - `src/main.js` — `App`: state, render loop (`_loop`/`_render`, dirty-flag redraw), view (yaw/pitch/zoom). Bootstraps `window.__app`.
 - `src/math4d.js` — 4×4 / 3×3 matrix + 4D vector helpers (`mat4PlaneRotation`, `mat4MulVec4`, `PLANE_AXES`, …) **+ the SO(4) geodesic** (`so4Slerp`, `so4Decompose`, `mat4Det`, `mat4FromCols`) used by stable centering.
 - `src/puzzle.js` — cubie model, `CELLS` (the 8 cells + colors), `executeMove`/`undoMove`.
-- `src/projection.js` — **the heart**: 4D→3D projection, cubie geometry, color fade, canonical frames. Almost all design decisions live here.
+- `src/projection.js` — **the heart**: 4D→3D projection, cubie geometry, color fade, wireframes (solid `computeCells` / wireframe `computeWireframe`, both keyed off the focused-layer weight `solidWeight` so they double as sub-views on a cell's own frame), canonical frames + `slerpFrame`, and the core-tesseract wireframe (`computeCoreWireframe`). Almost all design decisions live here.
 - `src/renderer.js` — WebGL: opaque, depth-tested, **no back-face culling**. `beginFrame()` clears the whole canvas; `drawView(cells, viewRot, segments, camDist, rect, zoom)` renders one scissored viewport (`zoom` crops/magnifies without moving the camera) — called once per view.
 - `src/animation.js` — `AnimationEngine`: move queue, easing, per-frame state. `MOVE_DURATION=360ms`, `speedFactor`.
+- `src/controls.js` — pointer + keyboard input and the DOM builders for the game shell (cell tiles, twist buttons).
 - `src/shaders.js` — GLSL. Two-sided lambert (`abs(dot(n,light))`), `u_ambient=0.42`; screen-door dither `discard` via an **ordered Bayer 8×8** threshold (uniform frosted stipple, not noise) — keeps each fragment with probability `a_opacity`, for the solid→wireframe dissolve and the translucent semitransparent side cells.
 - `scripts/serve.js` — zero-dep static dev server (sets ESM MIME types). `tests/` — Playwright specs. `playwright.config.js`, `eslint.config.js`, `package.json` — infra.
 
@@ -112,6 +113,17 @@ inner cube, the opposite cell the big enclosing one, the 6 others spread between
   face forward — and the 180° opposite-cell hop was not smooth. Don't reintroduce it.)
 - Cubies with <2 nonzero coords are hidden (`isHidden`): the 8 cell-centers + 1 core
   cubie. So **72 cubies render**, not 80.
+
+**Sub-views.** Each of the 8 cell tiles renders the **same** `computeCells` / `computeWireframe`
+as the main view, just on that cell's own canonical frame (`frameForCell(i)`): with the cell's
+axis as depth only its cubies have a high focused-layer weight, so its 6 side stickers form the
+cube faces and the along-axis cells read dark — the centred-cell look, isolated. A sub-view is
+effectively "central, side = none": it follows the **Central cell** mode (solid or wireframe),
+and a cubie sliding out during a neighbour's turn **fades to nothing via the same dither** as
+the main view instead of popping. Sub-views share the **one `viewRot`** (synchronized turntable)
+but never animate centering; they do animate turns (shared `getState`), so a twist of the centred
+cell rigidly spins its own cube while scrambling the neighbours'. All 9 views are drawn into
+scissored viewports of one canvas.
 
 **2. Each cubie is its OWN little Schlegel tesseract** (`cubieBoxes`), *placed* at its
 core position but *shaped* independently (so it doesn't inherit core distortion — it reads
@@ -176,6 +188,11 @@ untouched):
 | wire → wire | edges stay at full opacity throughout — **no** transition |
 | wire → none | edges dither out **into nothing** (`fade`) |
 
+Each main-view combo picks the right `computeWireframe` call (see `_render`). **Sub-views reuse
+this exactly** on the cell's own frame as "central, side = none", so a cubie leaving the cell
+fades instead of popping. Steady state needs no blending (every cubie is cleanly solid, wireframe,
+or absent).
+
 ### Other rendering facts
 
 - **No back-face culling** (`renderer.js`). The depth buffer handles occlusion; culling
@@ -192,8 +209,9 @@ untouched):
 
 ## View, modes, controls
 
-- **View** is a turntable: independent `viewYaw`/`viewPitch` (recomposed by
-  `_composeViewRot`, pitch clamped to ±90°) so a horizontal turn never introduces roll.
-  `viewZoom` sets the camera distance (`MAIN_CAM/zoom`). View changes never touch puzzle
-  state.
+- **View** is a turntable shared by all 9 views: independent `viewYaw`/`viewPitch`
+  (recomposed by `_composeViewRot`, pitch clamped to ±90°) so horizontal drag never
+  introduces roll. `viewZoom` sets the camera distance (`MAIN_CAM/zoom`) shared by all 9
+  views; sub-views additionally crop-zoom in (`SUBVIEW_ZOOM`) to fill their tile (same
+  perspective as the main view). View changes never touch puzzle state.
 

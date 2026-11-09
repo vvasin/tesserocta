@@ -1,13 +1,17 @@
 import { mat3Mul, mat3AxisRotation } from './math4d.js';
-import { buildSolvedPuzzle, undoMove } from './puzzle.js';
+import { buildSolvedPuzzle, undoMove, CELLS } from './puzzle.js';
 import { computeCells, computeWireframe, computeCoreWireframe,
          frameForCell, cloneFrame, slerpFrame, centralFromFrame } from './projection.js';
 import { Renderer } from './renderer.js';
 import { AnimationEngine } from './animation.js';
+import { buildCellTiles, setCenteredTile } from './controls.js';
 
 const DEFAULT_YAW  = -Math.PI / 5.5;         // resting turntable yaw; also the reference the twist
                                              // buttons orient against (their icons read right here)
 const MAIN_CAM     = 15;                      // camera distance at zoom 1 (main view default)
+const SUBVIEW_ZOOM = 2.4;                     // sub-views share the main camera distance and only
+                                             // crop-zoom in to fill the tile (no distortion). Tuned
+                                             // for zoom 1; sub-cubes scale with the main zoom.
 // View presentation = three independent settings (see _render). The central layer draws
 // solid or as wireframe; the side cells draw translucent, opaque, as wireframe or not at
 // all; the core-tesseract wireframe is a separate overlay.
@@ -26,6 +30,7 @@ class App {
     this.cubies = buildSolvedPuzzle();
     this.centralCellIndex = 0;
     this.coreFrame = frameForCell(this.centralCellIndex);    // explicit 4D core orientation
+    this.subFrames = CELLS.map((_, i) => frameForCell(i));   // fixed canonical frame per sub-view
     this.pendingCenter = null;                 // active centering { fromFrame, toFrame, toCi }
     // Three independent presentation settings, defaulting to a solid centre,
     // semitransparent sides and no core overlay.
@@ -51,6 +56,11 @@ class App {
     this.canvas = document.getElementById('glcanvas');
     this.renderer = new Renderer(this.canvas);
     this.stageEl = document.getElementById('stage');
+
+    buildCellTiles();
+    this.tileEls = [];
+    document.querySelectorAll('.cell-tile').forEach(el => { this.tileEls[+el.dataset.cell] = el; });
+    setCenteredTile(this.centralCellIndex);
 
     window.addEventListener('resize', () => this.markDirty());
     window.addEventListener('orientationchange', () => this.markDirty());
@@ -123,6 +133,20 @@ class App {
     // Main tesseract view.
     const camDist = MAIN_CAM / this.viewZoom;
     r.drawView(cells, this.viewRot, segments, camDist, rectOf(this.stageEl));
+    // 8 cell sub-views — each cell rendered on its own canonical frame (so only its cubies
+    // have weight), sharing the same viewRot AND camera distance as the main view (identical
+    // perspective), cropped to fill the tile. A sub-view is "central, side = none": it follows
+    // the central-cell mode (solid or wireframe) and a cubie sliding out during a neighbour's
+    // turn fades to nothing via the same dither.
+    for (let i = 0; i < 8; i++) {
+      if (centralWire) {
+        const seg = computeWireframe(this.cubies, this.subFrames[i], getState, { fade: true });
+        r.drawView([], this.viewRot, seg, camDist, rectOf(this.tileEls[i]), SUBVIEW_ZOOM);
+      } else {
+        const sub = computeCells(this.cubies, this.subFrames[i], getState);
+        r.drawView(sub, this.viewRot, null, camDist, rectOf(this.tileEls[i]), SUBVIEW_ZOOM);
+      }
+    }
   }
 
   // DOM element → GL device-pixel rect (origin bottom-left), relative to the canvas.
@@ -152,6 +176,7 @@ class App {
     };
     this.anim.queueCentralCell(this.centralCellIndex, cellIndex);
     this.centralCellIndex = cellIndex;
+    setCenteredTile(cellIndex);
     this.markDirty();
   }
 
