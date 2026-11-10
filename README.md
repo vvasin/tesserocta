@@ -1,6 +1,16 @@
+<p align="center">
+  <img src="assets/logo.svg" width="128" alt="Tesserocta logo">
+</p>
+
 # Tesserocta
 
 A 4D puzzle in eight views.
+
+**▶ [Play it live](https://vvasin.github.io/tesserocta/)** — runs in any modern browser, phone-first.
+
+<p align="center">
+  <a href="https://vvasin.github.io/tesserocta/"><img src="assets/screenshot.png" width="320" alt="Tesserocta gameplay: a scrambled tesseract with the centred cell as a solid 3×3×3 cube, the eight cell views above and below"></a>
+</p>
 
 A 3×3×3×3 twisty puzzle shown as a main tesseract projection plus its eight cubic cells.
 Vanilla JS + WebGL 1.0, no build step, no runtime dependencies.
@@ -37,7 +47,9 @@ interaction without console errors. Reference screenshots are written to
 ```
 index.html, style.css     entry point + styles
 src/                       app source (ES modules)
+assets/                    logo, favicon, README screenshot
 scripts/serve.js           zero-dependency static dev server
+scripts/make-logo.js       regenerates assets/logo.svg + favicon.svg
 tests/                     Playwright specs
 playwright.config.js       test runner config (boots the dev server)
 eslint.config.js           lint config
