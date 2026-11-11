@@ -47,7 +47,7 @@ interaction without console errors. Reference screenshots are written to
 ```
 index.html, style.css     entry point + styles
 src/                       app source (ES modules)
-assets/                    logo, favicon, README screenshot
+assets/                    logo, favicon, README screenshot, link-preview image
 scripts/serve.js           zero-dependency static dev server
 scripts/make-logo.js       regenerates assets/logo.svg + favicon.svg
 tests/                     Playwright specs
